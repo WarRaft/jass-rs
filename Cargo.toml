@@ -1,0 +1,16 @@
+[package]
+name = "jass-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A custom parser and linter for JASS and vJASS"
+license = "MIT"
+
+[[bin]]
+name = "jass-rs"
+path = "src/main.rs"
+
+[lib]
+name = "jass_rs"
+path = "src/lib.rs"
+
+[dependencies]

@@ -1,0 +1,713 @@
+use crate::ast::*;
+use crate::lexer::Lexer;
+use crate::token::{Token, TokenKind};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParseError {
+    pub message: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+pub struct Parser {
+    tokens: Vec<Token>,
+    pos: usize,
+}
+
+impl Parser {
+    pub fn new(tokens: Vec<Token>) -> Self {
+        Parser { tokens, pos: 0 }
+    }
+
+    pub fn parse_str(src: &str) -> Result<Program, ParseError> {
+        let tokens = Lexer::tokenize(src).map_err(|e| ParseError {
+            message: e.message,
+            line: e.line,
+            col: e.col,
+        })?;
+        Parser::new(tokens).program()
+    }
+
+    fn peek(&self) -> &Token {
+        &self.tokens[self.pos]
+    }
+
+    fn peek_kind(&self) -> &TokenKind {
+        &self.tokens[self.pos].kind
+    }
+
+    fn advance(&mut self) -> Token {
+        let t = self.tokens[self.pos].clone();
+        if self.pos + 1 < self.tokens.len() {
+            self.pos += 1;
+        }
+        t
+    }
+
+    fn check(&self, kind: &TokenKind) -> bool {
+        self.peek_kind() == kind
+    }
+
+    fn error(&self, message: impl Into<String>) -> ParseError {
+        let t = self.peek();
+        ParseError {
+            message: message.into(),
+            line: t.line,
+            col: t.col,
+        }
+    }
+
+    fn expect(&mut self, kind: TokenKind) -> Result<Token, ParseError> {
+        if self.peek_kind() == &kind {
+            Ok(self.advance())
+        } else {
+            Err(self.error(format!("expected {:?}, found {:?}", kind, self.peek_kind())))
+        }
+    }
+
+    fn expect_identifier(&mut self) -> Result<String, ParseError> {
+        match self.peek_kind().clone() {
+            TokenKind::Identifier(name) => {
+                self.advance();
+                Ok(name)
+            }
+            other => Err(self.error(format!("expected identifier, found {other:?}"))),
+        }
+    }
+
+    fn expect_type_name(&mut self) -> Result<String, ParseError> {
+        self.expect_identifier()
+    }
+
+    pub fn program(&mut self) -> Result<Program, ParseError> {
+        let mut items = Vec::new();
+        while !self.check(&TokenKind::Eof) {
+            items.push(self.top_level()?);
+        }
+        Ok(Program { items })
+    }
+
+    fn top_level(&mut self) -> Result<TopLevel, ParseError> {
+        match self.peek_kind().clone() {
+            TokenKind::Globals => self.globals_block(),
+            TokenKind::Type => self.type_def(),
+            TokenKind::Native => {
+                let line = self.peek().line;
+                self.advance();
+                let sig = self.function_sig(false, line)?;
+                Ok(TopLevel::Native(sig))
+            }
+            TokenKind::Constant => {
+                let line = self.peek().line;
+                self.advance();
+                self.expect(TokenKind::Native)?;
+                let sig = self.function_sig(true, line)?;
+                Ok(TopLevel::Native(sig))
+            }
+            TokenKind::Function => self.function_decl(),
+            other => Err(self.error(format!("unexpected top-level token {other:?}"))),
+        }
+    }
+
+    fn type_def(&mut self) -> Result<TopLevel, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::Type)?;
+        let name = self.expect_identifier()?;
+        self.expect(TokenKind::Extends)?;
+        let extends = self.expect_type_name()?;
+        Ok(TopLevel::TypeDef {
+            name,
+            extends,
+            line,
+        })
+    }
+
+    fn globals_block(&mut self) -> Result<TopLevel, ParseError> {
+        self.expect(TokenKind::Globals)?;
+        let mut decls = Vec::new();
+        while !self.check(&TokenKind::EndGlobals) {
+            if self.check(&TokenKind::Eof) {
+                return Err(self.error("unexpected end of file inside globals block"));
+            }
+            decls.push(self.global_decl()?);
+        }
+        self.expect(TokenKind::EndGlobals)?;
+        Ok(TopLevel::Globals(decls))
+    }
+
+    fn global_decl(&mut self) -> Result<GlobalDecl, ParseError> {
+        let line = self.peek().line;
+        let is_constant = if self.check(&TokenKind::Constant) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        let type_name = self.expect_type_name()?;
+        let is_array = if self.check(&TokenKind::Array) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        let name = self.expect_identifier()?;
+        let initializer = if self.check(&TokenKind::Assign) {
+            self.advance();
+            Some(self.expr()?)
+        } else {
+            None
+        };
+        Ok(GlobalDecl {
+            is_constant,
+            type_name,
+            is_array,
+            name,
+            initializer,
+            line,
+        })
+    }
+
+    fn function_sig(&mut self, is_constant: bool, line: usize) -> Result<FunctionSig, ParseError> {
+        let name = self.expect_identifier()?;
+        self.expect(TokenKind::Takes)?;
+        let params = if self.check(&TokenKind::Nothing) {
+            self.advance();
+            Vec::new()
+        } else {
+            let mut params = vec![self.param()?];
+            while self.check(&TokenKind::Comma) {
+                self.advance();
+                params.push(self.param()?);
+            }
+            params
+        };
+        self.expect(TokenKind::Returns)?;
+        let returns = if self.check(&TokenKind::Nothing) {
+            self.advance();
+            None
+        } else {
+            Some(self.expect_type_name()?)
+        };
+        Ok(FunctionSig {
+            name,
+            params,
+            returns,
+            is_constant,
+            line,
+        })
+    }
+
+    fn param(&mut self) -> Result<Param, ParseError> {
+        let type_name = self.expect_type_name()?;
+        let name = self.expect_identifier()?;
+        Ok(Param { type_name, name })
+    }
+
+    fn function_decl(&mut self) -> Result<TopLevel, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::Function)?;
+        let sig = self.function_sig(false, line)?;
+        let body = self.stmt_block(&[TokenKind::EndFunction])?;
+        self.expect(TokenKind::EndFunction)?;
+        Ok(TopLevel::Function(FunctionDecl { sig, body }))
+    }
+
+    fn stmt_block(&mut self, stop: &[TokenKind]) -> Result<Vec<Stmt>, ParseError> {
+        let mut stmts = Vec::new();
+        while !stop.contains(self.peek_kind()) {
+            if self.check(&TokenKind::Eof) {
+                return Err(self.error("unexpected end of file"));
+            }
+            stmts.push(self.stmt()?);
+        }
+        Ok(stmts)
+    }
+
+    fn stmt(&mut self) -> Result<Stmt, ParseError> {
+        match self.peek_kind().clone() {
+            TokenKind::Local => self.local_stmt(),
+            TokenKind::Set => self.set_stmt(),
+            TokenKind::Call => self.call_stmt(),
+            TokenKind::If => self.if_stmt(),
+            TokenKind::Loop => self.loop_stmt(),
+            TokenKind::ExitWhen => self.exitwhen_stmt(),
+            TokenKind::Return => self.return_stmt(),
+            other => Err(self.error(format!("unexpected token in statement position: {other:?}"))),
+        }
+    }
+
+    fn local_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::Local)?;
+        let type_name = self.expect_type_name()?;
+        let is_array = if self.check(&TokenKind::Array) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        let name = self.expect_identifier()?;
+        let initializer = if self.check(&TokenKind::Assign) {
+            self.advance();
+            Some(self.expr()?)
+        } else {
+            None
+        };
+        Ok(Stmt::Local {
+            type_name,
+            is_array,
+            name,
+            initializer,
+            line,
+        })
+    }
+
+    fn set_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::Set)?;
+        let name = self.expect_identifier()?;
+        let index = if self.check(&TokenKind::LBracket) {
+            self.advance();
+            let idx = self.expr()?;
+            self.expect(TokenKind::RBracket)?;
+            Some(idx)
+        } else {
+            None
+        };
+        self.expect(TokenKind::Assign)?;
+        let value = self.expr()?;
+        Ok(Stmt::Set {
+            name,
+            index,
+            value,
+            line,
+        })
+    }
+
+    fn call_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::Call)?;
+        let name = self.expect_identifier()?;
+        self.expect(TokenKind::LParen)?;
+        let args = self.expr_list(&TokenKind::RParen)?;
+        self.expect(TokenKind::RParen)?;
+        Ok(Stmt::Call { name, args, line })
+    }
+
+    fn if_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::If)?;
+        let mut branches = Vec::new();
+
+        let cond = self.expr()?;
+        self.expect(TokenKind::Then)?;
+        let body = self.stmt_block(&[TokenKind::ElseIf, TokenKind::Else, TokenKind::EndIf])?;
+        branches.push((cond, body));
+
+        let mut else_branch = None;
+        loop {
+            match self.peek_kind() {
+                TokenKind::ElseIf => {
+                    self.advance();
+                    let cond = self.expr()?;
+                    self.expect(TokenKind::Then)?;
+                    let body =
+                        self.stmt_block(&[TokenKind::ElseIf, TokenKind::Else, TokenKind::EndIf])?;
+                    branches.push((cond, body));
+                }
+                TokenKind::Else => {
+                    self.advance();
+                    let body = self.stmt_block(&[TokenKind::EndIf])?;
+                    else_branch = Some(body);
+                    break;
+                }
+                TokenKind::EndIf => break,
+                _ => return Err(self.error("expected 'elseif', 'else', or 'endif'")),
+            }
+        }
+        self.expect(TokenKind::EndIf)?;
+        Ok(Stmt::If {
+            branches,
+            else_branch,
+            line,
+        })
+    }
+
+    fn loop_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::Loop)?;
+        let body = self.stmt_block(&[TokenKind::EndLoop])?;
+        self.expect(TokenKind::EndLoop)?;
+        Ok(Stmt::Loop { body, line })
+    }
+
+    fn exitwhen_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::ExitWhen)?;
+        let cond = self.expr()?;
+        Ok(Stmt::ExitWhen { cond, line })
+    }
+
+    fn return_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::Return)?;
+        let value = if self.starts_expr() {
+            Some(self.expr()?)
+        } else {
+            None
+        };
+        Ok(Stmt::Return { value, line })
+    }
+
+    fn starts_expr(&self) -> bool {
+        matches!(
+            self.peek_kind(),
+            TokenKind::Identifier(_)
+                | TokenKind::IntLiteral(_)
+                | TokenKind::RealLiteral(_)
+                | TokenKind::StringLiteral(_)
+                | TokenKind::True
+                | TokenKind::False
+                | TokenKind::Null
+                | TokenKind::LParen
+                | TokenKind::Minus
+                | TokenKind::Not
+                | TokenKind::Function
+        )
+    }
+
+    fn expr_list(&mut self, end: &TokenKind) -> Result<Vec<Expr>, ParseError> {
+        let mut args = Vec::new();
+        if self.peek_kind() == end {
+            return Ok(args);
+        }
+        args.push(self.expr()?);
+        while self.check(&TokenKind::Comma) {
+            self.advance();
+            args.push(self.expr()?);
+        }
+        Ok(args)
+    }
+
+    pub fn expr(&mut self) -> Result<Expr, ParseError> {
+        self.or_expr()
+    }
+
+    fn or_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.and_expr()?;
+        while self.check(&TokenKind::Or) {
+            self.advance();
+            let right = self.and_expr()?;
+            left = Expr::Binary(Box::new(left), BinOp::Or, Box::new(right));
+        }
+        Ok(left)
+    }
+
+    fn and_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.equality_expr()?;
+        while self.check(&TokenKind::And) {
+            self.advance();
+            let right = self.equality_expr()?;
+            left = Expr::Binary(Box::new(left), BinOp::And, Box::new(right));
+        }
+        Ok(left)
+    }
+
+    fn equality_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.relational_expr()?;
+        loop {
+            let op = match self.peek_kind() {
+                TokenKind::EqEq => BinOp::Eq,
+                TokenKind::NotEq => BinOp::NotEq,
+                _ => break,
+            };
+            self.advance();
+            let right = self.relational_expr()?;
+            left = Expr::Binary(Box::new(left), op, Box::new(right));
+        }
+        Ok(left)
+    }
+
+    fn relational_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.additive_expr()?;
+        loop {
+            let op = match self.peek_kind() {
+                TokenKind::Gt => BinOp::Gt,
+                TokenKind::Lt => BinOp::Lt,
+                TokenKind::GtEq => BinOp::GtEq,
+                TokenKind::LtEq => BinOp::LtEq,
+                _ => break,
+            };
+            self.advance();
+            let right = self.additive_expr()?;
+            left = Expr::Binary(Box::new(left), op, Box::new(right));
+        }
+        Ok(left)
+    }
+
+    fn additive_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.multiplicative_expr()?;
+        loop {
+            let op = match self.peek_kind() {
+                TokenKind::Plus => BinOp::Add,
+                TokenKind::Minus => BinOp::Sub,
+                _ => break,
+            };
+            self.advance();
+            let right = self.multiplicative_expr()?;
+            left = Expr::Binary(Box::new(left), op, Box::new(right));
+        }
+        Ok(left)
+    }
+
+    fn multiplicative_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.unary_expr()?;
+        loop {
+            let op = match self.peek_kind() {
+                TokenKind::Star => BinOp::Mul,
+                TokenKind::Slash => BinOp::Div,
+                _ => break,
+            };
+            self.advance();
+            let right = self.unary_expr()?;
+            left = Expr::Binary(Box::new(left), op, Box::new(right));
+        }
+        Ok(left)
+    }
+
+    fn unary_expr(&mut self) -> Result<Expr, ParseError> {
+        match self.peek_kind() {
+            TokenKind::Minus => {
+                self.advance();
+                let e = self.unary_expr()?;
+                Ok(Expr::Unary(UnaryOp::Neg, Box::new(e)))
+            }
+            TokenKind::Not => {
+                self.advance();
+                let e = self.unary_expr()?;
+                Ok(Expr::Unary(UnaryOp::Not, Box::new(e)))
+            }
+            _ => self.primary_expr(),
+        }
+    }
+
+    fn primary_expr(&mut self) -> Result<Expr, ParseError> {
+        match self.peek_kind().clone() {
+            TokenKind::IntLiteral(v) => {
+                self.advance();
+                Ok(Expr::IntLiteral(v))
+            }
+            TokenKind::RealLiteral(v) => {
+                self.advance();
+                Ok(Expr::RealLiteral(v))
+            }
+            TokenKind::StringLiteral(v) => {
+                self.advance();
+                Ok(Expr::StringLiteral(v))
+            }
+            TokenKind::True => {
+                self.advance();
+                Ok(Expr::BoolLiteral(true))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Expr::BoolLiteral(false))
+            }
+            TokenKind::Null => {
+                self.advance();
+                Ok(Expr::Null)
+            }
+            TokenKind::LParen => {
+                self.advance();
+                let e = self.expr()?;
+                self.expect(TokenKind::RParen)?;
+                Ok(e)
+            }
+            TokenKind::Function => {
+                self.advance();
+                let name = self.expect_identifier()?;
+                Ok(Expr::FuncRef(name))
+            }
+            TokenKind::Identifier(name) => {
+                self.advance();
+                if self.check(&TokenKind::LParen) {
+                    self.advance();
+                    let args = self.expr_list(&TokenKind::RParen)?;
+                    self.expect(TokenKind::RParen)?;
+                    Ok(Expr::Call(name, args))
+                } else if self.check(&TokenKind::LBracket) {
+                    self.advance();
+                    let idx = self.expr()?;
+                    self.expect(TokenKind::RBracket)?;
+                    Ok(Expr::ArrayAccess(name, Box::new(idx)))
+                } else {
+                    Ok(Expr::Var(name))
+                }
+            }
+            other => Err(self.error(format!("unexpected token in expression: {other:?}"))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_empty_globals_block() {
+        let prog = Parser::parse_str("globals\nendglobals").unwrap();
+        assert_eq!(prog.items, vec![TopLevel::Globals(vec![])]);
+    }
+
+    #[test]
+    fn parses_global_declarations() {
+        let prog = Parser::parse_str(
+            "globals\n    integer x = 1\n    constant real PI = 3.14\n    unit array units\nendglobals",
+        )
+        .unwrap();
+        match &prog.items[0] {
+            TopLevel::Globals(decls) => {
+                assert_eq!(decls.len(), 3);
+                assert_eq!(decls[0].name, "x");
+                assert_eq!(decls[0].type_name, "integer");
+                assert!(!decls[0].is_constant);
+                assert_eq!(decls[1].name, "PI");
+                assert!(decls[1].is_constant);
+                assert_eq!(decls[2].name, "units");
+                assert!(decls[2].is_array);
+            }
+            other => panic!("expected globals, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_native_declaration() {
+        let prog = Parser::parse_str("native DoNothing takes nothing returns nothing").unwrap();
+        match &prog.items[0] {
+            TopLevel::Native(sig) => {
+                assert_eq!(sig.name, "DoNothing");
+                assert!(sig.params.is_empty());
+                assert_eq!(sig.returns, None);
+            }
+            other => panic!("expected native, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_simple_function() {
+        let src = r#"
+function Add takes integer a, integer b returns integer
+    local integer sum = a + b
+    return sum
+endfunction
+"#;
+        let prog = Parser::parse_str(src).unwrap();
+        match &prog.items[0] {
+            TopLevel::Function(f) => {
+                assert_eq!(f.sig.name, "Add");
+                assert_eq!(f.sig.params.len(), 2);
+                assert_eq!(f.sig.returns, Some("integer".to_string()));
+                assert_eq!(f.body.len(), 2);
+            }
+            other => panic!("expected function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_if_elseif_else() {
+        let src = r#"
+function Test takes nothing returns nothing
+    if 1 > 0 then
+        call A()
+    elseif 1 == 0 then
+        call B()
+    else
+        call C()
+    endif
+endfunction
+"#;
+        let prog = Parser::parse_str(src).unwrap();
+        match &prog.items[0] {
+            TopLevel::Function(f) => match &f.body[0] {
+                Stmt::If {
+                    branches,
+                    else_branch,
+                    ..
+                } => {
+                    assert_eq!(branches.len(), 2);
+                    assert!(else_branch.is_some());
+                }
+                other => panic!("expected if, got {other:?}"),
+            },
+            other => panic!("expected function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_loop_and_exitwhen() {
+        let src = r#"
+function Test takes nothing returns nothing
+    local integer i = 0
+    loop
+        exitwhen i > 10
+        set i = i + 1
+    endloop
+endfunction
+"#;
+        let prog = Parser::parse_str(src).unwrap();
+        match &prog.items[0] {
+            TopLevel::Function(f) => match &f.body[1] {
+                Stmt::Loop { body, .. } => {
+                    assert_eq!(body.len(), 2);
+                    assert!(matches!(body[0], Stmt::ExitWhen { .. }));
+                }
+                other => panic!("expected loop, got {other:?}"),
+            },
+            other => panic!("expected function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn respects_operator_precedence() {
+        let mut parser = Parser::new(Lexer::tokenize("1 + 2 * 3").unwrap());
+        let e = parser.expr().unwrap();
+        assert_eq!(
+            e,
+            Expr::Binary(
+                Box::new(Expr::IntLiteral(1)),
+                BinOp::Add,
+                Box::new(Expr::Binary(
+                    Box::new(Expr::IntLiteral(2)),
+                    BinOp::Mul,
+                    Box::new(Expr::IntLiteral(3)),
+                )),
+            )
+        );
+    }
+
+    #[test]
+    fn parses_array_access_and_call() {
+        let mut parser = Parser::new(Lexer::tokenize("arr[GetInt(1)]").unwrap());
+        let e = parser.expr().unwrap();
+        assert_eq!(
+            e,
+            Expr::ArrayAccess(
+                "arr".to_string(),
+                Box::new(Expr::Call("GetInt".to_string(), vec![Expr::IntLiteral(1)])),
+            )
+        );
+    }
+
+    #[test]
+    fn reports_error_on_missing_endif() {
+        let src = "function T takes nothing returns nothing\n if true then\n call A()\nendfunction";
+        let err = Parser::parse_str(src).unwrap_err();
+        assert!(err.message.contains("EndFunction"));
+    }
+
+    #[test]
+    fn reports_error_on_unknown_top_level_token() {
+        let err = Parser::parse_str("42").unwrap_err();
+        assert!(err.message.contains("unexpected top-level token"));
+    }
+}
