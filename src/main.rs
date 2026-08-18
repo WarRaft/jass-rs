@@ -2,14 +2,40 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use jass_rs::{lint, Level};
+use jass_rs::{lint, render_dot, render_tree, Level};
+
+enum Mode {
+    Lint,
+    Ast,
+    Dot,
+}
+
+fn usage() {
+    eprintln!("usage: jass-rs [--ast|--dot] <file.j>");
+    eprintln!("  (no flag)  lint the file and print diagnostics");
+    eprintln!("  --ast      print the parsed AST as an indented tree");
+    eprintln!("  --dot      print the parsed AST as a Graphviz DOT graph");
+}
 
 fn main() -> ExitCode {
-    let mut args = env::args().skip(1);
-    let path = match args.next() {
+    let mut mode = Mode::Lint;
+    let mut path = None;
+    for arg in env::args().skip(1) {
+        match arg.as_str() {
+            "--ast" => mode = Mode::Ast,
+            "--dot" => mode = Mode::Dot,
+            "-h" | "--help" => {
+                usage();
+                return ExitCode::SUCCESS;
+            }
+            other => path = Some(other.to_string()),
+        }
+    }
+
+    let path = match path {
         Some(path) => path,
         None => {
-            eprintln!("usage: jass-rs <file.j>");
+            usage();
             return ExitCode::FAILURE;
         }
     };
@@ -30,26 +56,38 @@ fn main() -> ExitCode {
         }
     };
 
-    let diagnostics = lint(&program);
-    let mut has_error = false;
-    for diag in &diagnostics {
-        let level = match diag.level {
-            Level::Error => {
-                has_error = true;
-                "error"
+    match mode {
+        Mode::Ast => {
+            print!("{}", render_tree(&program));
+            ExitCode::SUCCESS
+        }
+        Mode::Dot => {
+            print!("{}", render_dot(&program));
+            ExitCode::SUCCESS
+        }
+        Mode::Lint => {
+            let diagnostics = lint(&program);
+            let mut has_error = false;
+            for diag in &diagnostics {
+                let level = match diag.level {
+                    Level::Error => {
+                        has_error = true;
+                        "error"
+                    }
+                    Level::Warning => "warning",
+                };
+                println!("{path}:{}: {level}: {}", diag.line, diag.message);
             }
-            Level::Warning => "warning",
-        };
-        println!("{path}:{}: {level}: {}", diag.line, diag.message);
-    }
 
-    if diagnostics.is_empty() {
-        println!("{path}: no issues found");
-    }
+            if diagnostics.is_empty() {
+                println!("{path}: no issues found");
+            }
 
-    if has_error {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
+            if has_error {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
     }
 }
