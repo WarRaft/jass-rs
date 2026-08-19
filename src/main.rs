@@ -2,19 +2,23 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use jass_rs::{lint, render_dot, render_tree, Level};
+use jass_rs::{lint, render_dot, render_html, render_tree, Level};
 
 enum Mode {
     Lint,
     Ast,
     Dot,
+    Html,
 }
 
 fn usage() {
-    eprintln!("usage: jass-rs [--ast|--dot] <file.j>");
+    eprintln!("usage: jass-rs [--ast|--dot|--html] <file.j>");
     eprintln!("  (no flag)  lint the file and print diagnostics");
     eprintln!("  --ast      print the parsed AST as an indented tree");
     eprintln!("  --dot      print the parsed AST as a Graphviz DOT graph");
+    eprintln!("  --html     print a self-contained AST viewer page (source + tree)");
+    eprintln!();
+    eprintln!("  e.g. jass-rs --html file.j > file.ast.html && open file.ast.html");
 }
 
 fn main() -> ExitCode {
@@ -24,6 +28,7 @@ fn main() -> ExitCode {
         match arg.as_str() {
             "--ast" => mode = Mode::Ast,
             "--dot" => mode = Mode::Dot,
+            "--html" => mode = Mode::Html,
             "-h" | "--help" => {
                 usage();
                 return ExitCode::SUCCESS;
@@ -63,6 +68,10 @@ fn main() -> ExitCode {
         }
         Mode::Dot => {
             print!("{}", render_dot(&program));
+            ExitCode::SUCCESS
+        }
+        Mode::Html => {
+            print!("{}", render_html(&program, &src, &path));
             ExitCode::SUCCESS
         }
         Mode::Lint => {

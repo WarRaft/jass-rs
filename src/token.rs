@@ -63,12 +63,21 @@ pub enum TokenKind {
 pub struct Token {
     pub kind: TokenKind,
     pub line: usize,
+    /// 1-indexed column of the token's first character.
     pub col: usize,
+    /// 1-indexed column just past the token's last character (exclusive).
+    /// Tokens never span multiple lines, so this is always on `line`.
+    pub end_col: usize,
 }
 
 impl Token {
-    pub fn new(kind: TokenKind, line: usize, col: usize) -> Self {
-        Token { kind, line, col }
+    pub fn new(kind: TokenKind, line: usize, col: usize, end_col: usize) -> Self {
+        Token {
+            kind,
+            line,
+            col,
+            end_col,
+        }
     }
 }
 

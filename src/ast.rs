@@ -86,8 +86,78 @@ pub enum Stmt {
     },
 }
 
+/// A source location, used to map an AST node back to the exact text it was
+/// parsed from (for the HTML viewer's click-to-highlight sync in both
+/// directions). Columns are 1-indexed; `end_col` is exclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub start_line: usize,
+    pub start_col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+}
+
+impl Span {
+    pub fn new(start_line: usize, start_col: usize, end_line: usize, end_col: usize) -> Self {
+        Span {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        }
+    }
+
+    /// A span with no column information, meaning "somewhere on this line" —
+    /// used for statements, which only track their starting line.
+    pub fn whole_line(line: usize) -> Self {
+        Span::new(line, 0, line, 0)
+    }
+
+    fn to(self, other: Span) -> Span {
+        Span::new(
+            self.start_line,
+            self.start_col,
+            other.end_line,
+            other.end_col,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+}
+
+/// Compares only `kind`, ignoring `span` — spans are source-location
+/// bookkeeping, not part of an expression's identity, and hand-writing
+/// exact spans in test fixtures would be tedious and brittle.
+impl PartialEq for Expr {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
+impl Expr {
+    pub fn new(kind: ExprKind, span: Span) -> Self {
+        Expr { kind, span }
+    }
+
+    /// Builds two child spans into this expression's own span, e.g. for a
+    /// binary expression spanning from its left operand's start to its
+    /// right operand's end.
+    pub fn spanning(kind: ExprKind, from: Span, to: Span) -> Self {
+        Expr::new(kind, from.to(to))
+    }
+
+    #[cfg(test)]
+    pub fn dummy(kind: ExprKind) -> Self {
+        Expr::new(kind, Span::whole_line(0))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum ExprKind {
     IntLiteral(i64),
     RealLiteral(f64),
     StringLiteral(String),

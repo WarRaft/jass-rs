@@ -82,7 +82,7 @@ impl Lexer {
         let (line, col) = (self.line, self.col);
 
         let c = match self.peek() {
-            None => return Ok(Token::new(TokenKind::Eof, line, col)),
+            None => return Ok(Token::new(TokenKind::Eof, line, col, col)),
             Some(c) => c,
         };
 
@@ -158,7 +158,7 @@ impl Lexer {
             }
         };
 
-        Ok(Token::new(kind, line, col))
+        Ok(Token::new(kind, line, col, self.col))
     }
 
     fn lex_identifier(&mut self, line: usize, col: usize) -> Result<Token, LexError> {
@@ -172,7 +172,7 @@ impl Lexer {
             }
         }
         let kind = keyword(&s).unwrap_or(TokenKind::Identifier(s));
-        Ok(Token::new(kind, line, col))
+        Ok(Token::new(kind, line, col, self.col))
     }
 
     fn lex_number(&mut self, line: usize, col: usize) -> Result<Token, LexError> {
@@ -194,7 +194,12 @@ impl Lexer {
                 line,
                 col,
             })?;
-            return Ok(Token::new(TokenKind::IntLiteral(value), line, col));
+            return Ok(Token::new(
+                TokenKind::IntLiteral(value),
+                line,
+                col,
+                self.col,
+            ));
         }
 
         let mut s = String::new();
@@ -224,7 +229,12 @@ impl Lexer {
                 line,
                 col,
             })?;
-            return Ok(Token::new(TokenKind::RealLiteral(value), line, col));
+            return Ok(Token::new(
+                TokenKind::RealLiteral(value),
+                line,
+                col,
+                self.col,
+            ));
         }
 
         let value: i64 = s.parse().map_err(|_| LexError {
@@ -232,7 +242,12 @@ impl Lexer {
             line,
             col,
         })?;
-        Ok(Token::new(TokenKind::IntLiteral(value), line, col))
+        Ok(Token::new(
+            TokenKind::IntLiteral(value),
+            line,
+            col,
+            self.col,
+        ))
     }
 
     fn lex_string(&mut self, line: usize, col: usize) -> Result<Token, LexError> {
@@ -274,7 +289,7 @@ impl Lexer {
                 }
             }
         }
-        Ok(Token::new(TokenKind::StringLiteral(s), line, col))
+        Ok(Token::new(TokenKind::StringLiteral(s), line, col, self.col))
     }
 
     fn lex_rawcode(&mut self, line: usize, col: usize) -> Result<Token, LexError> {
@@ -310,7 +325,12 @@ impl Lexer {
         for b in s.bytes() {
             value = (value << 8) | b as i64;
         }
-        Ok(Token::new(TokenKind::IntLiteral(value), line, col))
+        Ok(Token::new(
+            TokenKind::IntLiteral(value),
+            line,
+            col,
+            self.col,
+        ))
     }
 }
 

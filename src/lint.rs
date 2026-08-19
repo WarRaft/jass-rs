@@ -226,30 +226,30 @@ fn contains_return(stmts: &[Stmt]) -> bool {
 }
 
 fn collect_used_vars(e: &Expr, used: &mut HashSet<String>) {
-    match e {
-        Expr::Var(name) => {
+    match &e.kind {
+        ExprKind::Var(name) => {
             used.insert(name.clone());
         }
-        Expr::ArrayAccess(name, idx) => {
+        ExprKind::ArrayAccess(name, idx) => {
             used.insert(name.clone());
             collect_used_vars(idx, used);
         }
-        Expr::Call(_, args) => {
+        ExprKind::Call(_, args) => {
             for a in args {
                 collect_used_vars(a, used);
             }
         }
-        Expr::Unary(_, inner) => collect_used_vars(inner, used),
-        Expr::Binary(l, _, r) => {
+        ExprKind::Unary(_, inner) => collect_used_vars(inner, used),
+        ExprKind::Binary(l, _, r) => {
             collect_used_vars(l, used);
             collect_used_vars(r, used);
         }
-        Expr::IntLiteral(_)
-        | Expr::RealLiteral(_)
-        | Expr::StringLiteral(_)
-        | Expr::BoolLiteral(_)
-        | Expr::Null
-        | Expr::FuncRef(_) => {}
+        ExprKind::IntLiteral(_)
+        | ExprKind::RealLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::FuncRef(_) => {}
     }
 }
 

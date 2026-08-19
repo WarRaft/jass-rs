@@ -398,7 +398,11 @@ impl Parser {
         while self.check(&TokenKind::Or) {
             self.advance();
             let right = self.and_expr()?;
-            left = Expr::Binary(Box::new(left), BinOp::Or, Box::new(right));
+            let span = combine_spans(left.span, right.span);
+            left = Expr::new(
+                ExprKind::Binary(Box::new(left), BinOp::Or, Box::new(right)),
+                span,
+            );
         }
         Ok(left)
     }
@@ -408,7 +412,11 @@ impl Parser {
         while self.check(&TokenKind::And) {
             self.advance();
             let right = self.equality_expr()?;
-            left = Expr::Binary(Box::new(left), BinOp::And, Box::new(right));
+            let span = combine_spans(left.span, right.span);
+            left = Expr::new(
+                ExprKind::Binary(Box::new(left), BinOp::And, Box::new(right)),
+                span,
+            );
         }
         Ok(left)
     }
@@ -423,7 +431,8 @@ impl Parser {
             };
             self.advance();
             let right = self.relational_expr()?;
-            left = Expr::Binary(Box::new(left), op, Box::new(right));
+            let span = combine_spans(left.span, right.span);
+            left = Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span);
         }
         Ok(left)
     }
@@ -440,7 +449,8 @@ impl Parser {
             };
             self.advance();
             let right = self.additive_expr()?;
-            left = Expr::Binary(Box::new(left), op, Box::new(right));
+            let span = combine_spans(left.span, right.span);
+            left = Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span);
         }
         Ok(left)
     }
@@ -455,7 +465,8 @@ impl Parser {
             };
             self.advance();
             let right = self.multiplicative_expr()?;
-            left = Expr::Binary(Box::new(left), op, Box::new(right));
+            let span = combine_spans(left.span, right.span);
+            left = Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span);
         }
         Ok(left)
     }
@@ -470,7 +481,8 @@ impl Parser {
             };
             self.advance();
             let right = self.unary_expr()?;
-            left = Expr::Binary(Box::new(left), op, Box::new(right));
+            let span = combine_spans(left.span, right.span);
+            left = Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span);
         }
         Ok(left)
     }
@@ -478,14 +490,16 @@ impl Parser {
     fn unary_expr(&mut self) -> Result<Expr, ParseError> {
         match self.peek_kind() {
             TokenKind::Minus => {
-                self.advance();
+                let op_tok = self.advance();
                 let e = self.unary_expr()?;
-                Ok(Expr::Unary(UnaryOp::Neg, Box::new(e)))
+                let span = Span::new(op_tok.line, op_tok.col, e.span.end_line, e.span.end_col);
+                Ok(Expr::new(ExprKind::Unary(UnaryOp::Neg, Box::new(e)), span))
             }
             TokenKind::Not => {
-                self.advance();
+                let op_tok = self.advance();
                 let e = self.unary_expr()?;
-                Ok(Expr::Unary(UnaryOp::Not, Box::new(e)))
+                let span = Span::new(op_tok.line, op_tok.col, e.span.end_line, e.span.end_col);
+                Ok(Expr::new(ExprKind::Unary(UnaryOp::Not, Box::new(e)), span))
             }
             _ => self.primary_expr(),
         }
@@ -494,59 +508,72 @@ impl Parser {
     fn primary_expr(&mut self) -> Result<Expr, ParseError> {
         match self.peek_kind().clone() {
             TokenKind::IntLiteral(v) => {
-                self.advance();
-                Ok(Expr::IntLiteral(v))
+                let tok = self.advance();
+                Ok(Expr::new(ExprKind::IntLiteral(v), tok_span(&tok)))
             }
             TokenKind::RealLiteral(v) => {
-                self.advance();
-                Ok(Expr::RealLiteral(v))
+                let tok = self.advance();
+                Ok(Expr::new(ExprKind::RealLiteral(v), tok_span(&tok)))
             }
             TokenKind::StringLiteral(v) => {
-                self.advance();
-                Ok(Expr::StringLiteral(v))
+                let tok = self.advance();
+                Ok(Expr::new(ExprKind::StringLiteral(v), tok_span(&tok)))
             }
             TokenKind::True => {
-                self.advance();
-                Ok(Expr::BoolLiteral(true))
+                let tok = self.advance();
+                Ok(Expr::new(ExprKind::BoolLiteral(true), tok_span(&tok)))
             }
             TokenKind::False => {
-                self.advance();
-                Ok(Expr::BoolLiteral(false))
+                let tok = self.advance();
+                Ok(Expr::new(ExprKind::BoolLiteral(false), tok_span(&tok)))
             }
             TokenKind::Null => {
-                self.advance();
-                Ok(Expr::Null)
+                let tok = self.advance();
+                Ok(Expr::new(ExprKind::Null, tok_span(&tok)))
             }
             TokenKind::LParen => {
-                self.advance();
+                let open = self.advance();
                 let e = self.expr()?;
-                self.expect(TokenKind::RParen)?;
-                Ok(e)
+                let close = self.expect(TokenKind::RParen)?;
+                let span = Span::new(open.line, open.col, close.line, close.end_col);
+                Ok(Expr::new(e.kind, span))
             }
             TokenKind::Function => {
-                self.advance();
+                let start = self.advance();
+                let ident_tok = self.peek().clone();
                 let name = self.expect_identifier()?;
-                Ok(Expr::FuncRef(name))
+                let span = Span::new(start.line, start.col, ident_tok.line, ident_tok.end_col);
+                Ok(Expr::new(ExprKind::FuncRef(name), span))
             }
             TokenKind::Identifier(name) => {
-                self.advance();
+                let tok = self.advance();
                 if self.check(&TokenKind::LParen) {
                     self.advance();
                     let args = self.expr_list(&TokenKind::RParen)?;
-                    self.expect(TokenKind::RParen)?;
-                    Ok(Expr::Call(name, args))
+                    let close = self.expect(TokenKind::RParen)?;
+                    let span = Span::new(tok.line, tok.col, close.line, close.end_col);
+                    Ok(Expr::new(ExprKind::Call(name, args), span))
                 } else if self.check(&TokenKind::LBracket) {
                     self.advance();
                     let idx = self.expr()?;
-                    self.expect(TokenKind::RBracket)?;
-                    Ok(Expr::ArrayAccess(name, Box::new(idx)))
+                    let close = self.expect(TokenKind::RBracket)?;
+                    let span = Span::new(tok.line, tok.col, close.line, close.end_col);
+                    Ok(Expr::new(ExprKind::ArrayAccess(name, Box::new(idx)), span))
                 } else {
-                    Ok(Expr::Var(name))
+                    Ok(Expr::new(ExprKind::Var(name), tok_span(&tok)))
                 }
             }
             other => Err(self.error(format!("unexpected token in expression: {other:?}"))),
         }
     }
+}
+
+fn tok_span(tok: &Token) -> Span {
+    Span::new(tok.line, tok.col, tok.line, tok.end_col)
+}
+
+fn combine_spans(a: Span, b: Span) -> Span {
+    Span::new(a.start_line, a.start_col, b.end_line, b.end_col)
 }
 
 #[cfg(test)]
@@ -673,16 +700,17 @@ endfunction
         let e = parser.expr().unwrap();
         assert_eq!(
             e,
-            Expr::Binary(
-                Box::new(Expr::IntLiteral(1)),
+            Expr::dummy(ExprKind::Binary(
+                Box::new(Expr::dummy(ExprKind::IntLiteral(1))),
                 BinOp::Add,
-                Box::new(Expr::Binary(
-                    Box::new(Expr::IntLiteral(2)),
+                Box::new(Expr::dummy(ExprKind::Binary(
+                    Box::new(Expr::dummy(ExprKind::IntLiteral(2))),
                     BinOp::Mul,
-                    Box::new(Expr::IntLiteral(3)),
-                )),
-            )
+                    Box::new(Expr::dummy(ExprKind::IntLiteral(3))),
+                ))),
+            ))
         );
+        assert_eq!(e.span, Span::new(1, 1, 1, 10));
     }
 
     #[test]
@@ -691,11 +719,15 @@ endfunction
         let e = parser.expr().unwrap();
         assert_eq!(
             e,
-            Expr::ArrayAccess(
+            Expr::dummy(ExprKind::ArrayAccess(
                 "arr".to_string(),
-                Box::new(Expr::Call("GetInt".to_string(), vec![Expr::IntLiteral(1)])),
-            )
+                Box::new(Expr::dummy(ExprKind::Call(
+                    "GetInt".to_string(),
+                    vec![Expr::dummy(ExprKind::IntLiteral(1))]
+                ))),
+            ))
         );
+        assert_eq!(e.span, Span::new(1, 1, 1, 15));
     }
 
     #[test]
