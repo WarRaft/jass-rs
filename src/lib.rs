@@ -4,13 +4,15 @@ pub mod lexer;
 pub mod lint;
 pub mod parser;
 pub mod printer;
+pub mod query;
 pub mod token;
 
-pub use ast::Program;
+pub use ast::{ColumnEncoding, Program, Span};
 pub use html::render_html;
 pub use lint::{lint, Diagnostic, Level};
 pub use parser::{ParseError, Parser};
 pub use printer::{render_dot, render_tree};
+pub use query::{find_node_at, find_node_in, AstRef};
 
 /// Parses JASS source into an AST.
 pub fn parse(src: &str) -> Result<Program, ParseError> {
