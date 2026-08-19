@@ -14,3 +14,4 @@ name = "jass_rs"
 path = "src/lib.rs"
 
 [dependencies]
+parser-rs = { path = "../parser-rs" }

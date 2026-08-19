@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "jass-rs"
 version = "0.1.0"
+dependencies = [
+ "parser-rs",
+]
+
+[[package]]
+name = "parser-rs"
+version = "0.1.0"
