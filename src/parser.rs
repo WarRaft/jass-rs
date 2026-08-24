@@ -7,6 +7,11 @@ pub struct ParseError {
     pub message: String,
     pub line: usize,
     pub col: usize,
+    /// Exclusive end column of the offending token, for consumers (e.g. an
+    /// editor) that want to underline the exact span rather than just a
+    /// single point. Lexer-level errors (which don't track a token's own
+    /// end) fall back to `col + 1`.
+    pub end_col: usize,
 }
 
 pub struct Parser {
@@ -24,6 +29,7 @@ impl Parser {
             message: e.message,
             line: e.line,
             col: e.col,
+            end_col: e.col + 1,
         })?;
         Parser::new(tokens).program()
     }
@@ -54,6 +60,7 @@ impl Parser {
             message: message.into(),
             line: t.line,
             col: t.col,
+            end_col: t.end_col,
         }
     }
 
