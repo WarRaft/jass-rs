@@ -1,18 +1,7 @@
 use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Level {
-    Error,
-    Warning,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Diagnostic {
-    pub level: Level,
-    pub message: String,
-    pub line: usize,
-}
+pub use parser_rs::{Diagnostic, Level};
 
 /// Runs every lint rule over a parsed program and returns the diagnostics
 /// found, sorted by source line.
@@ -35,14 +24,13 @@ fn check_duplicate_global_names(program: &Program, diags: &mut Vec<Diagnostic>) 
         if let TopLevel::Globals(decls) = item {
             for d in decls {
                 if let Some(&first) = seen.get(&d.name) {
-                    diags.push(Diagnostic {
-                        level: Level::Error,
-                        message: format!(
+                    diags.push(Diagnostic::error(
+                        format!(
                             "duplicate global variable '{}' (first declared at line {first})",
                             d.name
                         ),
-                        line: d.line,
-                    });
+                        d.line,
+                    ));
                 } else {
                     seen.insert(d.name.clone(), d.line);
                 }
@@ -60,11 +48,10 @@ fn check_duplicate_top_level_names(program: &Program, diags: &mut Vec<Diagnostic
             _ => continue,
         };
         if let Some(&first) = seen.get(name) {
-            diags.push(Diagnostic {
-                level: Level::Error,
-                message: format!("duplicate function '{name}' (first declared at line {first})"),
+            diags.push(Diagnostic::error(
+                format!("duplicate function '{name}' (first declared at line {first})"),
                 line,
-            });
+            ));
         } else {
             seen.insert(name.clone(), line);
         }
@@ -88,21 +75,19 @@ fn check_function(f: &FunctionDecl, diags: &mut Vec<Diagnostic>) {
     for local in locals {
         if let Stmt::Local { name, line, .. } = local {
             if let Some(&first_line) = seen.get(name) {
-                diags.push(Diagnostic {
-                    level: Level::Error,
-                    message: format!(
+                diags.push(Diagnostic::error(
+                    format!(
                         "duplicate local variable '{name}' (first declared at line {first_line})"
                     ),
-                    line: *line,
-                });
+                    *line,
+                ));
             } else {
                 seen.insert(name.clone(), *line);
                 if !used.contains(name) {
-                    diags.push(Diagnostic {
-                        level: Level::Warning,
-                        message: format!("unused local variable '{name}'"),
-                        line: *line,
-                    });
+                    diags.push(Diagnostic::warning(
+                        format!("unused local variable '{name}'"),
+                        *line,
+                    ));
                 }
             }
         }
@@ -111,14 +96,13 @@ fn check_function(f: &FunctionDecl, diags: &mut Vec<Diagnostic>) {
     check_stmts(&f.body, diags);
 
     if f.sig.returns.is_some() && !contains_return(&f.body) {
-        diags.push(Diagnostic {
-            level: Level::Warning,
-            message: format!(
+        diags.push(Diagnostic::warning(
+            format!(
                 "function '{}' declares a return type but has no 'return' statement",
                 f.sig.name
             ),
-            line: f.sig.line,
-        });
+            f.sig.line,
+        ));
     }
 }
 
@@ -149,11 +133,10 @@ fn check_stmts(stmts: &[Stmt], diags: &mut Vec<Diagnostic>) {
         match s {
             Stmt::Loop { body, line } => {
                 if !contains_exitwhen(body) {
-                    diags.push(Diagnostic {
-                        level: Level::Warning,
-                        message: "loop has no 'exitwhen' and may never terminate".to_string(),
-                        line: *line,
-                    });
+                    diags.push(Diagnostic::warning(
+                        "loop has no 'exitwhen' and may never terminate",
+                        *line,
+                    ));
                 }
                 check_stmts(body, diags);
             }
@@ -164,21 +147,13 @@ fn check_stmts(stmts: &[Stmt], diags: &mut Vec<Diagnostic>) {
             } => {
                 for (_, body) in branches {
                     if body.is_empty() {
-                        diags.push(Diagnostic {
-                            level: Level::Warning,
-                            message: "empty 'then' branch".to_string(),
-                            line: *line,
-                        });
+                        diags.push(Diagnostic::warning("empty 'then' branch", *line));
                     }
                     check_stmts(body, diags);
                 }
                 if let Some(body) = else_branch {
                     if body.is_empty() {
-                        diags.push(Diagnostic {
-                            level: Level::Warning,
-                            message: "empty 'else' branch".to_string(),
-                            line: *line,
-                        });
+                        diags.push(Diagnostic::warning("empty 'else' branch", *line));
                     }
                     check_stmts(body, diags);
                 }

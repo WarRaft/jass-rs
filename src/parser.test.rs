@@ -134,6 +134,34 @@ fn respects_operator_precedence() {
 }
 
 #[test]
+fn and_binds_looser_than_or() {
+    // `false and true or true` == `false and (true or true)` == false.
+    let mut parser = Parser::new(Lexer::tokenize("false and true or true").unwrap());
+    let e = parser.expr().unwrap();
+    let b = |v| Box::new(Expr::dummy(ExprKind::BoolLiteral(v)));
+    assert_eq!(
+        e,
+        Expr::dummy(ExprKind::Binary(
+            b(false),
+            BinOp::And,
+            Box::new(Expr::dummy(ExprKind::Binary(b(true), BinOp::Or, b(true)))),
+        ))
+    );
+
+    // Same grouping with the operators the other way round.
+    let mut parser = Parser::new(Lexer::tokenize("true or false and false").unwrap());
+    let e = parser.expr().unwrap();
+    assert_eq!(
+        e,
+        Expr::dummy(ExprKind::Binary(
+            Box::new(Expr::dummy(ExprKind::Binary(b(true), BinOp::Or, b(false)))),
+            BinOp::And,
+            b(false),
+        ))
+    );
+}
+
+#[test]
 fn parses_array_access_and_call() {
     let mut parser = Parser::new(Lexer::tokenize("arr[GetInt(1)]").unwrap());
     let e = parser.expr().unwrap();
@@ -154,7 +182,7 @@ fn parses_array_access_and_call() {
 fn reports_error_on_missing_endif() {
     let src = "function T takes nothing returns nothing\n if true then\n call A()\nendfunction";
     let err = Parser::parse_str(src).unwrap_err();
-    assert!(err.message.contains("EndFunction"));
+    assert!(err.message.contains("'endfunction'"));
 }
 
 #[test]

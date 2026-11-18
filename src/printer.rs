@@ -1,44 +1,5 @@
 use crate::ast::*;
-
-/// A generic labelled tree used as an intermediate representation between
-/// the AST and its rendered forms (indented text, Graphviz DOT, the HTML
-/// viewer, ...). `kind` is a coarse category used for coloring in the HTML
-/// viewer; `span` (when known) lets that viewer highlight the matching
-/// source range on click. Statements only track a starting line (see
-/// [`Span::whole_line`]), while expressions carry a precise column range.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Node {
-    pub label: String,
-    pub kind: &'static str,
-    pub span: Option<Span>,
-    pub children: Vec<Node>,
-}
-
-impl Node {
-    fn leaf(label: impl Into<String>) -> Self {
-        Node {
-            label: label.into(),
-            kind: "node",
-            span: None,
-            children: Vec::new(),
-        }
-    }
-
-    fn with_children(label: impl Into<String>, children: Vec<Node>) -> Self {
-        Node {
-            label: label.into(),
-            kind: "node",
-            span: None,
-            children,
-        }
-    }
-
-    fn tag(mut self, kind: &'static str, span: Option<Span>) -> Self {
-        self.kind = kind;
-        self.span = span;
-        self
-    }
-}
+pub use parser_rs::Node;
 
 /// Builds a visualizable tree out of a parsed program.
 pub fn build_tree(program: &Program) -> Node {
@@ -62,51 +23,12 @@ pub fn build_tree(program: &Program) -> Node {
 ///       └─ Var sum
 /// ```
 pub fn render_tree(program: &Program) -> String {
-    let root = build_tree(program);
-    let mut out = String::new();
-    out.push_str(&root.label);
-    out.push('\n');
-    render_children(&root.children, "", &mut out);
-    out
+    parser_rs::render_tree(&build_tree(program))
 }
 
-fn render_children(children: &[Node], prefix: &str, out: &mut String) {
-    for (i, child) in children.iter().enumerate() {
-        let is_last = i == children.len() - 1;
-        let connector = if is_last { "└─ " } else { "├─ " };
-        out.push_str(prefix);
-        out.push_str(connector);
-        out.push_str(&child.label);
-        out.push('\n');
-        let child_prefix = format!("{prefix}{}", if is_last { "   " } else { "│  " });
-        render_children(&child.children, &child_prefix, out);
-    }
-}
-
-/// Renders the program's AST as a Graphviz DOT graph. Feed the output to
-/// `dot -Tpng` (or an online viewer) to get an actual picture of the tree.
+/// Renders the program's AST as a Graphviz DOT graph.
 pub fn render_dot(program: &Program) -> String {
-    let root = build_tree(program);
-    let mut out = String::new();
-    out.push_str("digraph AST {\n");
-    out.push_str("    node [shape=box, fontname=\"monospace\"];\n");
-    let mut counter = 0usize;
-    write_dot_node(&root, &mut counter, None, &mut out);
-    out.push_str("}\n");
-    out
-}
-
-fn write_dot_node(node: &Node, counter: &mut usize, parent: Option<usize>, out: &mut String) {
-    let id = *counter;
-    *counter += 1;
-    let escaped = node.label.replace('\\', "\\\\").replace('"', "\\\"");
-    out.push_str(&format!("    n{id} [label=\"{escaped}\"];\n"));
-    if let Some(p) = parent {
-        out.push_str(&format!("    n{p} -> n{id};\n"));
-    }
-    for child in &node.children {
-        write_dot_node(child, counter, Some(id), out);
-    }
+    parser_rs::render_dot(&build_tree(program))
 }
 
 fn top_level_node(item: &TopLevel) -> Node {

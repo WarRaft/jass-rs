@@ -80,18 +80,6 @@ pub fn find_node_at(program: &Program, line: usize, col: usize) -> Option<AstRef
     find_node_in(program, line, col, col)
 }
 
-fn contains(span: Span, line: usize, start_col: usize, end_col: usize) -> bool {
-    if span.start_col == 0 {
-        // Whole-line sentinel: matches any column query on its line range.
-        line >= span.start_line && line <= span.end_line
-    } else {
-        span.start_line == line
-            && span.end_line == line
-            && span.start_col <= start_col
-            && end_col <= span.end_col
-    }
-}
-
 fn self_or_none(
     node: AstRef<'_>,
     span: Span,
@@ -99,7 +87,7 @@ fn self_or_none(
     sc: usize,
     ec: usize,
 ) -> Option<AstRef<'_>> {
-    contains(span, line, sc, ec).then_some(node)
+    span.contains(line, sc, ec).then_some(node)
 }
 
 fn find_in_top_level<'a>(

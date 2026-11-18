@@ -1,118 +1,46 @@
-#[derive(Debug, Clone, PartialEq)]
-pub enum TokenKind {
-    // Keywords
-    Function,
-    EndFunction,
-    Takes,
-    Returns,
-    Nothing,
-    Native,
-    Globals,
-    EndGlobals,
-    Constant,
-    Local,
-    Set,
-    Call,
-    If,
-    Then,
-    ElseIf,
-    Else,
-    EndIf,
-    Loop,
-    EndLoop,
-    ExitWhen,
-    Return,
-    Type,
-    Extends,
-    Array,
-    And,
-    Or,
-    Not,
-    True,
-    False,
-    Null,
+//! JASS's token vocabulary: its keywords, on top of the shared
+//! [`parser_rs::TokenKind`] (identifiers, literals, [`Punct`]uation).
 
-    // Literals
-    Identifier(String),
-    IntLiteral(i64),
-    RealLiteral(f64),
-    StringLiteral(String),
+pub use parser_rs::{Keyword, Punct};
 
-    // Punctuation / operators
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    EqEq,
-    NotEq,
-    Gt,
-    Lt,
-    GtEq,
-    LtEq,
-    Assign,
-    LParen,
-    RParen,
-    LBracket,
-    RBracket,
-    Comma,
-
-    Eof,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Token {
-    pub kind: TokenKind,
-    pub line: usize,
-    /// 1-indexed column of the token's first character.
-    pub col: usize,
-    /// 1-indexed column just past the token's last character (exclusive).
-    /// Tokens never span multiple lines, so this is always on `line`.
-    pub end_col: usize,
-}
-
-impl Token {
-    pub fn new(kind: TokenKind, line: usize, col: usize, end_col: usize) -> Self {
-        Token {
-            kind,
-            line,
-            col,
-            end_col,
-        }
+parser_rs::keywords! {
+    /// Every JASS keyword.
+    pub enum Kw {
+        Function = "function",
+        EndFunction = "endfunction",
+        Takes = "takes",
+        Returns = "returns",
+        Nothing = "nothing",
+        Native = "native",
+        Globals = "globals",
+        EndGlobals = "endglobals",
+        Constant = "constant",
+        Local = "local",
+        Set = "set",
+        Call = "call",
+        If = "if",
+        Then = "then",
+        ElseIf = "elseif",
+        Else = "else",
+        EndIf = "endif",
+        Loop = "loop",
+        EndLoop = "endloop",
+        ExitWhen = "exitwhen",
+        Return = "return",
+        Type = "type",
+        Extends = "extends",
+        Array = "array",
+        And = "and",
+        Or = "or",
+        Not = "not",
+        True = "true",
+        False = "false",
+        Null = "null",
     }
 }
 
-pub fn keyword(word: &str) -> Option<TokenKind> {
-    Some(match word {
-        "function" => TokenKind::Function,
-        "endfunction" => TokenKind::EndFunction,
-        "takes" => TokenKind::Takes,
-        "returns" => TokenKind::Returns,
-        "nothing" => TokenKind::Nothing,
-        "native" => TokenKind::Native,
-        "globals" => TokenKind::Globals,
-        "endglobals" => TokenKind::EndGlobals,
-        "constant" => TokenKind::Constant,
-        "local" => TokenKind::Local,
-        "set" => TokenKind::Set,
-        "call" => TokenKind::Call,
-        "if" => TokenKind::If,
-        "then" => TokenKind::Then,
-        "elseif" => TokenKind::ElseIf,
-        "else" => TokenKind::Else,
-        "endif" => TokenKind::EndIf,
-        "loop" => TokenKind::Loop,
-        "endloop" => TokenKind::EndLoop,
-        "exitwhen" => TokenKind::ExitWhen,
-        "return" => TokenKind::Return,
-        "type" => TokenKind::Type,
-        "extends" => TokenKind::Extends,
-        "array" => TokenKind::Array,
-        "and" => TokenKind::And,
-        "or" => TokenKind::Or,
-        "not" => TokenKind::Not,
-        "true" => TokenKind::True,
-        "false" => TokenKind::False,
-        "null" => TokenKind::Null,
-        _ => return None,
-    })
-}
+/// A JASS token kind — the shared [`parser_rs::TokenKind`] over [`Kw`].
+pub type TokenKind = parser_rs::TokenKind<Kw>;
+
+/// A JASS token.
+pub type Token = parser_rs::Token<TokenKind>;

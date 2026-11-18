@@ -1,4 +1,5 @@
 use super::*;
+use crate::token::{TokenKind, Kw, Punct};
 
 fn kinds(src: &str) -> Vec<TokenKind> {
     Lexer::tokenize(src)
@@ -13,11 +14,11 @@ fn tokenizes_keywords() {
     assert_eq!(
         kinds("function endfunction takes returns nothing"),
         vec![
-            TokenKind::Function,
-            TokenKind::EndFunction,
-            TokenKind::Takes,
-            TokenKind::Returns,
-            TokenKind::Nothing,
+            TokenKind::Keyword(Kw::Function),
+            TokenKind::Keyword(Kw::EndFunction),
+            TokenKind::Keyword(Kw::Takes),
+            TokenKind::Keyword(Kw::Returns),
+            TokenKind::Keyword(Kw::Nothing),
             TokenKind::Eof,
         ]
     );
@@ -28,10 +29,10 @@ fn tokenizes_identifiers_and_numbers() {
     assert_eq!(
         kinds("foo 123 4.25 0x1F"),
         vec![
-            TokenKind::Identifier("foo".to_string()),
-            TokenKind::IntLiteral(123),
-            TokenKind::RealLiteral(4.25),
-            TokenKind::IntLiteral(31),
+            TokenKind::Ident("foo".to_string()),
+            TokenKind::Int(123),
+            TokenKind::Real(4.25),
+            TokenKind::Int(31),
             TokenKind::Eof,
         ]
     );
@@ -42,7 +43,7 @@ fn tokenizes_string_literal_with_escapes() {
     assert_eq!(
         kinds(r#""hello\nworld""#),
         vec![
-            TokenKind::StringLiteral("hello\nworld".to_string()),
+            TokenKind::Str("hello\nworld".to_string()),
             TokenKind::Eof,
         ]
     );
@@ -52,7 +53,7 @@ fn tokenizes_string_literal_with_escapes() {
 fn tokenizes_rawcode_literal() {
     assert_eq!(
         kinds("'hfoo'"),
-        vec![TokenKind::IntLiteral(0x68666f6f), TokenKind::Eof,]
+        vec![TokenKind::Int(0x68666f6f), TokenKind::Eof,]
     );
 }
 
@@ -61,13 +62,13 @@ fn tokenizes_operators() {
     assert_eq!(
         kinds("== != >= <= = > <"),
         vec![
-            TokenKind::EqEq,
-            TokenKind::NotEq,
-            TokenKind::GtEq,
-            TokenKind::LtEq,
-            TokenKind::Assign,
-            TokenKind::Gt,
-            TokenKind::Lt,
+            TokenKind::Punct(Punct::EqEq),
+            TokenKind::Punct(Punct::NotEq),
+            TokenKind::Punct(Punct::GtEq),
+            TokenKind::Punct(Punct::LtEq),
+            TokenKind::Punct(Punct::Assign),
+            TokenKind::Punct(Punct::Gt),
+            TokenKind::Punct(Punct::Lt),
             TokenKind::Eof,
         ]
     );
@@ -78,14 +79,14 @@ fn skips_line_comments() {
     assert_eq!(
         kinds("set x = 1 // comment\nset y = 2"),
         vec![
-            TokenKind::Set,
-            TokenKind::Identifier("x".to_string()),
-            TokenKind::Assign,
-            TokenKind::IntLiteral(1),
-            TokenKind::Set,
-            TokenKind::Identifier("y".to_string()),
-            TokenKind::Assign,
-            TokenKind::IntLiteral(2),
+            TokenKind::Keyword(Kw::Set),
+            TokenKind::Ident("x".to_string()),
+            TokenKind::Punct(Punct::Assign),
+            TokenKind::Int(1),
+            TokenKind::Keyword(Kw::Set),
+            TokenKind::Ident("y".to_string()),
+            TokenKind::Punct(Punct::Assign),
+            TokenKind::Int(2),
             TokenKind::Eof,
         ]
     );

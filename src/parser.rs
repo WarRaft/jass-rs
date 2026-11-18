@@ -1,84 +1,64 @@
 use crate::ast::*;
 use crate::lexer::Lexer;
-use crate::token::{Token, TokenKind};
+use crate::token::{Kw, Punct, Token, TokenKind};
+use parser_rs::{TokenParser, TokenStream};
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParseError {
-    pub message: String,
-    pub line: usize,
-    pub col: usize,
-    /// Exclusive end column of the offending token, for consumers (e.g. an
-    /// editor) that want to underline the exact span rather than just a
-    /// single point. Lexer-level errors (which don't track a token's own
-    /// end) fall back to `col + 1`.
-    pub end_col: usize,
-}
+pub use parser_rs::ParseError;
 
 pub struct Parser {
-    tokens: Vec<Token>,
-    pos: usize,
+    ts: TokenStream<TokenKind>,
+}
+
+impl TokenParser for Parser {
+    type Kind = TokenKind;
+
+    fn tokens(&mut self) -> &mut TokenStream<TokenKind> {
+        &mut self.ts
+    }
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser {
+            ts: TokenStream::new(tokens),
+        }
     }
 
     pub fn parse_str(src: &str) -> Result<Program, ParseError> {
-        let tokens = Lexer::tokenize(src).map_err(|e| ParseError {
-            message: e.message,
-            line: e.line,
-            col: e.col,
-            end_col: e.col + 1,
-        })?;
-        Parser::new(tokens).program()
+        Parser::new(Lexer::tokenize(src)?).program()
     }
 
     fn peek(&self) -> &Token {
-        &self.tokens[self.pos]
+        self.ts.peek()
     }
 
     fn peek_kind(&self) -> &TokenKind {
-        &self.tokens[self.pos].kind
+        self.ts.peek_kind()
     }
 
     fn advance(&mut self) -> Token {
-        let t = self.tokens[self.pos].clone();
-        if self.pos + 1 < self.tokens.len() {
-            self.pos += 1;
-        }
-        t
+        self.ts.advance()
     }
 
     fn check(&self, kind: &TokenKind) -> bool {
-        self.peek_kind() == kind
+        self.ts.check(kind)
     }
 
     fn error(&self, message: impl Into<String>) -> ParseError {
-        let t = self.peek();
-        ParseError {
-            message: message.into(),
-            line: t.line,
-            col: t.col,
-            end_col: t.end_col,
-        }
+        self.ts.error(message)
     }
 
     fn expect(&mut self, kind: TokenKind) -> Result<Token, ParseError> {
-        if self.peek_kind() == &kind {
-            Ok(self.advance())
-        } else {
-            Err(self.error(format!("expected {:?}, found {:?}", kind, self.peek_kind())))
-        }
+        self.ts.expect(kind)
     }
 
     fn expect_identifier(&mut self) -> Result<String, ParseError> {
         match self.peek_kind().clone() {
-            TokenKind::Identifier(name) => {
+            TokenKind::Ident(name) => {
                 self.advance();
                 Ok(name)
             }
-            other => Err(self.error(format!("expected identifier, found {other:?}"))),
+            other => Err(self.error(format!("expected identifier, found {other}"))),
         }
     }
 
@@ -96,31 +76,31 @@ impl Parser {
 
     fn top_level(&mut self) -> Result<TopLevel, ParseError> {
         match self.peek_kind().clone() {
-            TokenKind::Globals => self.globals_block(),
-            TokenKind::Type => self.type_def(),
-            TokenKind::Native => {
+            TokenKind::Keyword(Kw::Globals) => self.globals_block(),
+            TokenKind::Keyword(Kw::Type) => self.type_def(),
+            TokenKind::Keyword(Kw::Native) => {
                 let line = self.peek().line;
                 self.advance();
                 let sig = self.function_sig(false, line)?;
                 Ok(TopLevel::Native(sig))
             }
-            TokenKind::Constant => {
+            TokenKind::Keyword(Kw::Constant) => {
                 let line = self.peek().line;
                 self.advance();
-                self.expect(TokenKind::Native)?;
+                self.expect(TokenKind::Keyword(Kw::Native))?;
                 let sig = self.function_sig(true, line)?;
                 Ok(TopLevel::Native(sig))
             }
-            TokenKind::Function => self.function_decl(),
-            other => Err(self.error(format!("unexpected top-level token {other:?}"))),
+            TokenKind::Keyword(Kw::Function) => self.function_decl(),
+            other => Err(self.error(format!("unexpected top-level token {other}"))),
         }
     }
 
     fn type_def(&mut self) -> Result<TopLevel, ParseError> {
         let line = self.peek().line;
-        self.expect(TokenKind::Type)?;
+        self.expect(TokenKind::Keyword(Kw::Type))?;
         let name = self.expect_identifier()?;
-        self.expect(TokenKind::Extends)?;
+        self.expect(TokenKind::Keyword(Kw::Extends))?;
         let extends = self.expect_type_name()?;
         Ok(TopLevel::TypeDef {
             name,
@@ -130,35 +110,35 @@ impl Parser {
     }
 
     fn globals_block(&mut self) -> Result<TopLevel, ParseError> {
-        self.expect(TokenKind::Globals)?;
+        self.expect(TokenKind::Keyword(Kw::Globals))?;
         let mut decls = Vec::new();
-        while !self.check(&TokenKind::EndGlobals) {
+        while !self.check(&TokenKind::Keyword(Kw::EndGlobals)) {
             if self.check(&TokenKind::Eof) {
                 return Err(self.error("unexpected end of file inside globals block"));
             }
             decls.push(self.global_decl()?);
         }
-        self.expect(TokenKind::EndGlobals)?;
+        self.expect(TokenKind::Keyword(Kw::EndGlobals))?;
         Ok(TopLevel::Globals(decls))
     }
 
     fn global_decl(&mut self) -> Result<GlobalDecl, ParseError> {
         let line = self.peek().line;
-        let is_constant = if self.check(&TokenKind::Constant) {
+        let is_constant = if self.check(&TokenKind::Keyword(Kw::Constant)) {
             self.advance();
             true
         } else {
             false
         };
         let type_name = self.expect_type_name()?;
-        let is_array = if self.check(&TokenKind::Array) {
+        let is_array = if self.check(&TokenKind::Keyword(Kw::Array)) {
             self.advance();
             true
         } else {
             false
         };
         let name = self.expect_identifier()?;
-        let initializer = if self.check(&TokenKind::Assign) {
+        let initializer = if self.check(&TokenKind::Punct(Punct::Assign)) {
             self.advance();
             Some(self.expr()?)
         } else {
@@ -176,20 +156,20 @@ impl Parser {
 
     fn function_sig(&mut self, is_constant: bool, line: usize) -> Result<FunctionSig, ParseError> {
         let name = self.expect_identifier()?;
-        self.expect(TokenKind::Takes)?;
-        let params = if self.check(&TokenKind::Nothing) {
+        self.expect(TokenKind::Keyword(Kw::Takes))?;
+        let params = if self.check(&TokenKind::Keyword(Kw::Nothing)) {
             self.advance();
             Vec::new()
         } else {
             let mut params = vec![self.param()?];
-            while self.check(&TokenKind::Comma) {
+            while self.check(&TokenKind::Punct(Punct::Comma)) {
                 self.advance();
                 params.push(self.param()?);
             }
             params
         };
-        self.expect(TokenKind::Returns)?;
-        let returns = if self.check(&TokenKind::Nothing) {
+        self.expect(TokenKind::Keyword(Kw::Returns))?;
+        let returns = if self.check(&TokenKind::Keyword(Kw::Nothing)) {
             self.advance();
             None
         } else {
@@ -212,10 +192,10 @@ impl Parser {
 
     fn function_decl(&mut self) -> Result<TopLevel, ParseError> {
         let line = self.peek().line;
-        self.expect(TokenKind::Function)?;
+        self.expect(TokenKind::Keyword(Kw::Function))?;
         let sig = self.function_sig(false, line)?;
-        let body = self.stmt_block(&[TokenKind::EndFunction])?;
-        self.expect(TokenKind::EndFunction)?;
+        let body = self.stmt_block(&[TokenKind::Keyword(Kw::EndFunction)])?;
+        self.expect(TokenKind::Keyword(Kw::EndFunction))?;
         Ok(TopLevel::Function(FunctionDecl { sig, body }))
     }
 
@@ -232,29 +212,29 @@ impl Parser {
 
     fn stmt(&mut self) -> Result<Stmt, ParseError> {
         match self.peek_kind().clone() {
-            TokenKind::Local => self.local_stmt(),
-            TokenKind::Set => self.set_stmt(),
-            TokenKind::Call => self.call_stmt(),
-            TokenKind::If => self.if_stmt(),
-            TokenKind::Loop => self.loop_stmt(),
-            TokenKind::ExitWhen => self.exitwhen_stmt(),
-            TokenKind::Return => self.return_stmt(),
-            other => Err(self.error(format!("unexpected token in statement position: {other:?}"))),
+            TokenKind::Keyword(Kw::Local) => self.local_stmt(),
+            TokenKind::Keyword(Kw::Set) => self.set_stmt(),
+            TokenKind::Keyword(Kw::Call) => self.call_stmt(),
+            TokenKind::Keyword(Kw::If) => self.if_stmt(),
+            TokenKind::Keyword(Kw::Loop) => self.loop_stmt(),
+            TokenKind::Keyword(Kw::ExitWhen) => self.exitwhen_stmt(),
+            TokenKind::Keyword(Kw::Return) => self.return_stmt(),
+            other => Err(self.error(format!("unexpected token in statement position: {other}"))),
         }
     }
 
     fn local_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
-        self.expect(TokenKind::Local)?;
+        self.expect(TokenKind::Keyword(Kw::Local))?;
         let type_name = self.expect_type_name()?;
-        let is_array = if self.check(&TokenKind::Array) {
+        let is_array = if self.check(&TokenKind::Keyword(Kw::Array)) {
             self.advance();
             true
         } else {
             false
         };
         let name = self.expect_identifier()?;
-        let initializer = if self.check(&TokenKind::Assign) {
+        let initializer = if self.check(&TokenKind::Punct(Punct::Assign)) {
             self.advance();
             Some(self.expr()?)
         } else {
@@ -271,17 +251,17 @@ impl Parser {
 
     fn set_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
-        self.expect(TokenKind::Set)?;
+        self.expect(TokenKind::Keyword(Kw::Set))?;
         let name = self.expect_identifier()?;
-        let index = if self.check(&TokenKind::LBracket) {
+        let index = if self.check(&TokenKind::Punct(Punct::LBracket)) {
             self.advance();
             let idx = self.expr()?;
-            self.expect(TokenKind::RBracket)?;
+            self.expect(TokenKind::Punct(Punct::RBracket))?;
             Some(idx)
         } else {
             None
         };
-        self.expect(TokenKind::Assign)?;
+        self.expect(TokenKind::Punct(Punct::Assign))?;
         let value = self.expr()?;
         Ok(Stmt::Set {
             name,
@@ -293,46 +273,46 @@ impl Parser {
 
     fn call_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
-        self.expect(TokenKind::Call)?;
+        self.expect(TokenKind::Keyword(Kw::Call))?;
         let name = self.expect_identifier()?;
-        self.expect(TokenKind::LParen)?;
-        let args = self.expr_list(&TokenKind::RParen)?;
-        self.expect(TokenKind::RParen)?;
+        self.expect(TokenKind::Punct(Punct::LParen))?;
+        let args = self.expr_list(&TokenKind::Punct(Punct::RParen))?;
+        self.expect(TokenKind::Punct(Punct::RParen))?;
         Ok(Stmt::Call { name, args, line })
     }
 
     fn if_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
-        self.expect(TokenKind::If)?;
+        self.expect(TokenKind::Keyword(Kw::If))?;
         let mut branches = Vec::new();
 
         let cond = self.expr()?;
-        self.expect(TokenKind::Then)?;
-        let body = self.stmt_block(&[TokenKind::ElseIf, TokenKind::Else, TokenKind::EndIf])?;
+        self.expect(TokenKind::Keyword(Kw::Then))?;
+        let body = self.stmt_block(&[TokenKind::Keyword(Kw::ElseIf), TokenKind::Keyword(Kw::Else), TokenKind::Keyword(Kw::EndIf)])?;
         branches.push((cond, body));
 
         let mut else_branch = None;
         loop {
             match self.peek_kind() {
-                TokenKind::ElseIf => {
+                TokenKind::Keyword(Kw::ElseIf) => {
                     self.advance();
                     let cond = self.expr()?;
-                    self.expect(TokenKind::Then)?;
+                    self.expect(TokenKind::Keyword(Kw::Then))?;
                     let body =
-                        self.stmt_block(&[TokenKind::ElseIf, TokenKind::Else, TokenKind::EndIf])?;
+                        self.stmt_block(&[TokenKind::Keyword(Kw::ElseIf), TokenKind::Keyword(Kw::Else), TokenKind::Keyword(Kw::EndIf)])?;
                     branches.push((cond, body));
                 }
-                TokenKind::Else => {
+                TokenKind::Keyword(Kw::Else) => {
                     self.advance();
-                    let body = self.stmt_block(&[TokenKind::EndIf])?;
+                    let body = self.stmt_block(&[TokenKind::Keyword(Kw::EndIf)])?;
                     else_branch = Some(body);
                     break;
                 }
-                TokenKind::EndIf => break,
+                TokenKind::Keyword(Kw::EndIf) => break,
                 _ => return Err(self.error("expected 'elseif', 'else', or 'endif'")),
             }
         }
-        self.expect(TokenKind::EndIf)?;
+        self.expect(TokenKind::Keyword(Kw::EndIf))?;
         Ok(Stmt::If {
             branches,
             else_branch,
@@ -342,22 +322,22 @@ impl Parser {
 
     fn loop_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
-        self.expect(TokenKind::Loop)?;
-        let body = self.stmt_block(&[TokenKind::EndLoop])?;
-        self.expect(TokenKind::EndLoop)?;
+        self.expect(TokenKind::Keyword(Kw::Loop))?;
+        let body = self.stmt_block(&[TokenKind::Keyword(Kw::EndLoop)])?;
+        self.expect(TokenKind::Keyword(Kw::EndLoop))?;
         Ok(Stmt::Loop { body, line })
     }
 
     fn exitwhen_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
-        self.expect(TokenKind::ExitWhen)?;
+        self.expect(TokenKind::Keyword(Kw::ExitWhen))?;
         let cond = self.expr()?;
         Ok(Stmt::ExitWhen { cond, line })
     }
 
     fn return_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
-        self.expect(TokenKind::Return)?;
+        self.expect(TokenKind::Keyword(Kw::Return))?;
         let value = if self.starts_expr() {
             Some(self.expr()?)
         } else {
@@ -369,17 +349,17 @@ impl Parser {
     fn starts_expr(&self) -> bool {
         matches!(
             self.peek_kind(),
-            TokenKind::Identifier(_)
-                | TokenKind::IntLiteral(_)
-                | TokenKind::RealLiteral(_)
-                | TokenKind::StringLiteral(_)
-                | TokenKind::True
-                | TokenKind::False
-                | TokenKind::Null
-                | TokenKind::LParen
-                | TokenKind::Minus
-                | TokenKind::Not
-                | TokenKind::Function
+            TokenKind::Ident(_)
+                | TokenKind::Int(_)
+                | TokenKind::Real(_)
+                | TokenKind::Str(_)
+                | TokenKind::Keyword(Kw::True)
+                | TokenKind::Keyword(Kw::False)
+                | TokenKind::Keyword(Kw::Null)
+                | TokenKind::Punct(Punct::LParen)
+                | TokenKind::Punct(Punct::Minus)
+                | TokenKind::Keyword(Kw::Not)
+                | TokenKind::Keyword(Kw::Function)
         )
     }
 
@@ -389,7 +369,7 @@ impl Parser {
             return Ok(args);
         }
         args.push(self.expr()?);
-        while self.check(&TokenKind::Comma) {
+        while self.check(&TokenKind::Punct(Punct::Comma)) {
             self.advance();
             args.push(self.expr()?);
         }
@@ -397,112 +377,87 @@ impl Parser {
     }
 
     pub fn expr(&mut self) -> Result<Expr, ParseError> {
-        self.or_expr()
+        self.and_expr()
+    }
+
+    /// Unlike C-family languages, JASS gives `and` *lower* precedence than
+    /// `or`: `false and true or true` is `false and (true or true)`, i.e.
+    /// `false`.
+    fn and_expr(&mut self) -> Result<Expr, ParseError> {
+        self.left_assoc(
+            Self::or_expr,
+            |k| matches!(k, TokenKind::Keyword(Kw::And)).then_some(BinOp::And),
+            binary,
+        )
     }
 
     fn or_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.and_expr()?;
-        while self.check(&TokenKind::Or) {
-            self.advance();
-            let right = self.and_expr()?;
-            let span = combine_spans(left.span, right.span);
-            left = Expr::new(
-                ExprKind::Binary(Box::new(left), BinOp::Or, Box::new(right)),
-                span,
-            );
-        }
-        Ok(left)
-    }
-
-    fn and_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.equality_expr()?;
-        while self.check(&TokenKind::And) {
-            self.advance();
-            let right = self.equality_expr()?;
-            let span = combine_spans(left.span, right.span);
-            left = Expr::new(
-                ExprKind::Binary(Box::new(left), BinOp::And, Box::new(right)),
-                span,
-            );
-        }
-        Ok(left)
+        self.left_assoc(
+            Self::equality_expr,
+            |k| matches!(k, TokenKind::Keyword(Kw::Or)).then_some(BinOp::Or),
+            binary,
+        )
     }
 
     fn equality_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.relational_expr()?;
-        loop {
-            let op = match self.peek_kind() {
-                TokenKind::EqEq => BinOp::Eq,
-                TokenKind::NotEq => BinOp::NotEq,
-                _ => break,
-            };
-            self.advance();
-            let right = self.relational_expr()?;
-            let span = combine_spans(left.span, right.span);
-            left = Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span);
-        }
-        Ok(left)
+        self.left_assoc(
+            Self::relational_expr,
+            |k| match k {
+                TokenKind::Punct(Punct::EqEq) => Some(BinOp::Eq),
+                TokenKind::Punct(Punct::NotEq) => Some(BinOp::NotEq),
+                _ => None,
+            },
+            binary,
+        )
     }
 
     fn relational_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.additive_expr()?;
-        loop {
-            let op = match self.peek_kind() {
-                TokenKind::Gt => BinOp::Gt,
-                TokenKind::Lt => BinOp::Lt,
-                TokenKind::GtEq => BinOp::GtEq,
-                TokenKind::LtEq => BinOp::LtEq,
-                _ => break,
-            };
-            self.advance();
-            let right = self.additive_expr()?;
-            let span = combine_spans(left.span, right.span);
-            left = Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span);
-        }
-        Ok(left)
+        self.left_assoc(
+            Self::additive_expr,
+            |k| match k {
+                TokenKind::Punct(Punct::Gt) => Some(BinOp::Gt),
+                TokenKind::Punct(Punct::Lt) => Some(BinOp::Lt),
+                TokenKind::Punct(Punct::GtEq) => Some(BinOp::GtEq),
+                TokenKind::Punct(Punct::LtEq) => Some(BinOp::LtEq),
+                _ => None,
+            },
+            binary,
+        )
     }
 
     fn additive_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.multiplicative_expr()?;
-        loop {
-            let op = match self.peek_kind() {
-                TokenKind::Plus => BinOp::Add,
-                TokenKind::Minus => BinOp::Sub,
-                _ => break,
-            };
-            self.advance();
-            let right = self.multiplicative_expr()?;
-            let span = combine_spans(left.span, right.span);
-            left = Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span);
-        }
-        Ok(left)
+        self.left_assoc(
+            Self::multiplicative_expr,
+            |k| match k {
+                TokenKind::Punct(Punct::Plus) => Some(BinOp::Add),
+                TokenKind::Punct(Punct::Minus) => Some(BinOp::Sub),
+                _ => None,
+            },
+            binary,
+        )
     }
 
     fn multiplicative_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.unary_expr()?;
-        loop {
-            let op = match self.peek_kind() {
-                TokenKind::Star => BinOp::Mul,
-                TokenKind::Slash => BinOp::Div,
-                _ => break,
-            };
-            self.advance();
-            let right = self.unary_expr()?;
-            let span = combine_spans(left.span, right.span);
-            left = Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span);
-        }
-        Ok(left)
+        self.left_assoc(
+            Self::unary_expr,
+            |k| match k {
+                TokenKind::Punct(Punct::Star) => Some(BinOp::Mul),
+                TokenKind::Punct(Punct::Slash) => Some(BinOp::Div),
+                _ => None,
+            },
+            binary,
+        )
     }
 
     fn unary_expr(&mut self) -> Result<Expr, ParseError> {
         match self.peek_kind() {
-            TokenKind::Minus => {
+            TokenKind::Punct(Punct::Minus) => {
                 let op_tok = self.advance();
                 let e = self.unary_expr()?;
                 let span = Span::new(op_tok.line, op_tok.col, e.span.end_line, e.span.end_col);
                 Ok(Expr::new(ExprKind::Unary(UnaryOp::Neg, Box::new(e)), span))
             }
-            TokenKind::Not => {
+            TokenKind::Keyword(Kw::Not) => {
                 let op_tok = self.advance();
                 let e = self.unary_expr()?;
                 let span = Span::new(op_tok.line, op_tok.col, e.span.end_line, e.span.end_col);
@@ -514,73 +469,74 @@ impl Parser {
 
     fn primary_expr(&mut self) -> Result<Expr, ParseError> {
         match self.peek_kind().clone() {
-            TokenKind::IntLiteral(v) => {
+            TokenKind::Int(v) => {
                 let tok = self.advance();
                 Ok(Expr::new(ExprKind::IntLiteral(v), tok_span(&tok)))
             }
-            TokenKind::RealLiteral(v) => {
+            TokenKind::Real(v) => {
                 let tok = self.advance();
                 Ok(Expr::new(ExprKind::RealLiteral(v), tok_span(&tok)))
             }
-            TokenKind::StringLiteral(v) => {
+            TokenKind::Str(v) => {
                 let tok = self.advance();
                 Ok(Expr::new(ExprKind::StringLiteral(v), tok_span(&tok)))
             }
-            TokenKind::True => {
+            TokenKind::Keyword(Kw::True) => {
                 let tok = self.advance();
                 Ok(Expr::new(ExprKind::BoolLiteral(true), tok_span(&tok)))
             }
-            TokenKind::False => {
+            TokenKind::Keyword(Kw::False) => {
                 let tok = self.advance();
                 Ok(Expr::new(ExprKind::BoolLiteral(false), tok_span(&tok)))
             }
-            TokenKind::Null => {
+            TokenKind::Keyword(Kw::Null) => {
                 let tok = self.advance();
                 Ok(Expr::new(ExprKind::Null, tok_span(&tok)))
             }
-            TokenKind::LParen => {
+            TokenKind::Punct(Punct::LParen) => {
                 let open = self.advance();
                 let e = self.expr()?;
-                let close = self.expect(TokenKind::RParen)?;
+                let close = self.expect(TokenKind::Punct(Punct::RParen))?;
                 let span = Span::new(open.line, open.col, close.line, close.end_col);
                 Ok(Expr::new(e.kind, span))
             }
-            TokenKind::Function => {
+            TokenKind::Keyword(Kw::Function) => {
                 let start = self.advance();
                 let ident_tok = self.peek().clone();
                 let name = self.expect_identifier()?;
                 let span = Span::new(start.line, start.col, ident_tok.line, ident_tok.end_col);
                 Ok(Expr::new(ExprKind::FuncRef(name), span))
             }
-            TokenKind::Identifier(name) => {
+            TokenKind::Ident(name) => {
                 let tok = self.advance();
-                if self.check(&TokenKind::LParen) {
+                if self.check(&TokenKind::Punct(Punct::LParen)) {
                     self.advance();
-                    let args = self.expr_list(&TokenKind::RParen)?;
-                    let close = self.expect(TokenKind::RParen)?;
+                    let args = self.expr_list(&TokenKind::Punct(Punct::RParen))?;
+                    let close = self.expect(TokenKind::Punct(Punct::RParen))?;
                     let span = Span::new(tok.line, tok.col, close.line, close.end_col);
                     Ok(Expr::new(ExprKind::Call(name, args), span))
-                } else if self.check(&TokenKind::LBracket) {
+                } else if self.check(&TokenKind::Punct(Punct::LBracket)) {
                     self.advance();
                     let idx = self.expr()?;
-                    let close = self.expect(TokenKind::RBracket)?;
+                    let close = self.expect(TokenKind::Punct(Punct::RBracket))?;
                     let span = Span::new(tok.line, tok.col, close.line, close.end_col);
                     Ok(Expr::new(ExprKind::ArrayAccess(name, Box::new(idx)), span))
                 } else {
                     Ok(Expr::new(ExprKind::Var(name), tok_span(&tok)))
                 }
             }
-            other => Err(self.error(format!("unexpected token in expression: {other:?}"))),
+            other => Err(self.error(format!("unexpected token in expression: {other}"))),
         }
     }
 }
 
 fn tok_span(tok: &Token) -> Span {
-    Span::new(tok.line, tok.col, tok.line, tok.end_col)
+    tok.span()
 }
 
-fn combine_spans(a: Span, b: Span) -> Span {
-    Span::new(a.start_line, a.start_col, b.end_line, b.end_col)
+fn binary(left: Expr, op: BinOp, right: Expr) -> Expr {
+    let span = left.span.join(right.span);
+    Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span)
 }
 
 #[cfg(test)]
