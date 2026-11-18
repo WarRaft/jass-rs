@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::lexer::Lexer;
+use crate::lexer::{Dialect, Lexer};
 use crate::token::{Kw, Punct, Token, TokenKind};
 use parser_rs::{TokenParser, TokenStream};
 
@@ -25,7 +25,11 @@ impl Parser {
     }
 
     pub fn parse_str(src: &str) -> Result<Program, ParseError> {
-        Parser::new(Lexer::tokenize(src)?).program()
+        Parser::parse_str_with(src, Dialect::Jass)
+    }
+
+    pub fn parse_str_with(src: &str, dialect: Dialect) -> Result<Program, ParseError> {
+        Parser::new(Lexer::tokenize_with(src, dialect)?).program()
     }
 
     fn peek(&self) -> &Token {
@@ -92,6 +96,17 @@ impl Parser {
                 Ok(TopLevel::Native(sig))
             }
             TokenKind::Keyword(Kw::Function) => self.function_decl(),
+            // Control passes to the Zinc parser for the whole block, with
+            // file-absolute lines, and comes back here for the next token.
+            TokenKind::Embedded(block) if block.lang == "zinc" => {
+                self.advance();
+                let program = zinc_rs::parse_at(&block.source, block.first_line)?;
+                Ok(TopLevel::Zinc(ZincBlock {
+                    program,
+                    open: block.open,
+                    close: block.close,
+                }))
+            }
             other => Err(self.error(format!("unexpected top-level token {other}"))),
         }
     }

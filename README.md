@@ -9,6 +9,9 @@ the token stream, diagnostics, tree renderers and the HTML AST viewer.
 - [Parser status](#parser-status) — what `jass-rs` handles today
 - [CLI](#cli) · [Tests](#tests)
 
+How the parser is built, and the rules every parser here follows, is in
+the [`parser-rs` README](../parser-rs/README.md#principles).
+
 ---
 
 ## The JASS language
@@ -179,11 +182,49 @@ Supported: everything in the reference above **except**:
 | locals-first rule                         | `local` is accepted anywhere in a body                  |
 | declarations-before-functions order       | top-level items may be interleaved                      |
 | type checking / declare-before-use        | no symbol or type resolution yet                        |
-| vJASS                                     | none of it yet                                          |
+| vJASS                                     | `Dialect::VJass` = JASS + vJASS keywords + `/* */` + `//! zinc` blocks; `library`/`struct`/... grammar not yet |
 
 Lint rules: duplicate globals, functions and locals (errors); unused
 locals, `loop` without `exitwhen`, empty `then`/`else` branches, and a
 missing `return` in a function that declares a return type (warnings).
+
+## Dialects and embedded Zinc
+
+`jass_rs::parse(src)` reads plain JASS. `jass_rs::parse_with(src,
+Dialect::VJass)` reads vJASS: the same parser with a bigger keyword set
+(`VJASS_KEYWORDS`), `/* */` comments, and **embedded Zinc**.
+
+```jass
+globals
+    integer gCount = 0
+endglobals
+
+//! zinc
+library Counter {
+    public function Bump(integer by) -> integer { gCount += by; return gCount; }
+}
+//! endzinc
+
+function Main takes nothing returns nothing
+    call Bump(1)
+endfunction
+```
+
+- **Lexer.** It turns each `//! zinc` … `//! endzinc` block into one
+  token.
+- **Parser.** At top level, the parser hands the block to
+  `zinc_rs::parse_at` and resumes with the next JASS token. The block
+  becomes `TopLevel::Zinc(ZincBlock { program, open, close })`.
+- **Positions.** All positions inside it are file-absolute.
+- **Delegation.** Lint, the AST tree, `find_node_at` (which returns
+  `AstRef::Zinc`) and semantic highlighting all delegate to `zinc-rs`.
+- **Restrictions.** A block inside a function is a parse error. An
+  unterminated block is an error at its `//! zinc` line.
+- **Plain JASS.** Here `//! zinc` is just a comment.
+
+The VS Code extension reads `.j` files as vJASS. See the
+[`parser-rs` design notes](../parser-rs/README.md#4-embedded-languages-one-token-then-hand-over-control)
+for how embedding works in general.
 
 ## CLI
 
@@ -192,6 +233,7 @@ cargo run -- file.j            # lint
 cargo run -- --ast file.j      # indented AST tree
 cargo run -- --dot file.j      # Graphviz DOT
 cargo run -- --html file.j > file.ast.html && open file.ast.html
+cargo run -- --vjass file.j    # any mode, reading vJASS (embedded //! zinc)
 ```
 
 ## Tests

@@ -10,8 +10,11 @@ pub fn lint(program: &Program) -> Vec<Diagnostic> {
     check_duplicate_top_level_names(program, &mut diags);
     check_duplicate_global_names(program, &mut diags);
     for item in &program.items {
-        if let TopLevel::Function(f) = item {
-            check_function(f, &mut diags);
+        match item {
+            TopLevel::Function(f) => check_function(f, &mut diags),
+            // Zinc blocks are linted by Zinc's own rules.
+            TopLevel::Zinc(block) => diags.extend(zinc_rs::lint(&block.program)),
+            _ => {}
         }
     }
     diags.sort_by_key(|d| d.line);

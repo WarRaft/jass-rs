@@ -19,6 +19,8 @@ pub enum AstRef<'a> {
     GlobalDecl(&'a GlobalDecl),
     Stmt(&'a Stmt),
     Expr(&'a Expr),
+    /// A node inside a `//! zinc` block.
+    Zinc(zinc_rs::AstRef<'a>),
 }
 
 impl<'a> AstRef<'a> {
@@ -31,6 +33,7 @@ impl<'a> AstRef<'a> {
             AstRef::GlobalDecl(d) => Span::whole_line(d.line),
             AstRef::Stmt(s) => Span::whole_line(stmt_line(s)),
             AstRef::Expr(e) => e.span,
+            AstRef::Zinc(z) => z.span(),
         }
     }
 }
@@ -43,6 +46,7 @@ fn top_level_line(item: &TopLevel) -> usize {
         TopLevel::TypeDef { line, .. } => *line,
         TopLevel::Native(sig) => sig.line,
         TopLevel::Function(f) => f.sig.line,
+        TopLevel::Zinc(block) => block.open.start_line,
     }
 }
 
@@ -97,6 +101,10 @@ fn find_in_top_level<'a>(
     ec: usize,
 ) -> Option<AstRef<'a>> {
     match item {
+        // Hand the lookup to zinc-rs; the block itself is the fallback.
+        TopLevel::Zinc(block) => zinc_rs::find_node_in(&block.program, line, sc, ec)
+            .map(AstRef::Zinc)
+            .or_else(|| self_or_none(AstRef::TopLevel(item), block.span(), line, sc, ec)),
         TopLevel::Globals(decls) => decls.iter().find_map(|d| {
             find_in_expr_opt(d.initializer.as_ref(), line, sc, ec).or_else(|| {
                 self_or_none(

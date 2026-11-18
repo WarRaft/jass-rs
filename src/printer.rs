@@ -33,6 +33,14 @@ pub fn render_dot(program: &Program) -> String {
 
 fn top_level_node(item: &TopLevel) -> Node {
     match item {
+        TopLevel::Zinc(block) => {
+            let span = block.span();
+            Node::with_children(
+                format!("Zinc (lines {}-{})", span.start_line, span.end_line),
+                zinc_rs::printer::build_tree(&block.program).children,
+            )
+            .tag("container", Some(span))
+        }
         TopLevel::Globals(decls) => {
             Node::with_children("Globals", decls.iter().map(global_decl_node).collect())
                 .tag("container", None)

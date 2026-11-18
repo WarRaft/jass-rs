@@ -19,6 +19,28 @@ pub enum TopLevel {
     },
     Native(FunctionSig),
     Function(FunctionDecl),
+    /// A vJASS `//! zinc` ... `//! endzinc` block, parsed by `zinc-rs`.
+    Zinc(ZincBlock),
+}
+
+/// Zinc code embedded in a (v)JASS file. Every position inside `program`
+/// is file-absolute, like the rest of the AST.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZincBlock {
+    pub program: zinc_rs::Program,
+    /// The `//! zinc` directive line.
+    pub open: Span,
+    /// The `//! endzinc` directive line (always present once parsed).
+    pub close: Option<Span>,
+}
+
+impl ZincBlock {
+    /// The block's whole line range, directives included, as a
+    /// whole-line span.
+    pub fn span(&self) -> Span {
+        let end = self.close.unwrap_or(self.open).end_line;
+        Span::new(self.open.start_line, 0, end, 0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

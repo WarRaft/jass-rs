@@ -95,7 +95,7 @@ fn still_highlights_unparsable_code() {
 
 #[test]
 fn encodes_for_the_editor() {
-    let data = encoded_semantic_tokens("set x = 1");
+    let data = encoded_semantic_tokens("set x = 1", Dialect::Jass);
     // set (keyword), x (variable+modification), = (operator), 1 (number)
     assert_eq!(data.len(), 4 * 5);
     assert_eq!(&data[..5], &[0, 0, 3, T::Keyword.index(), 0]);

@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use jass_rs::{lint, render_dot, render_html, render_tree, Level};
+use jass_rs::{lint, render_dot, render_html, render_tree, Dialect, Level};
 
 enum Mode {
     Lint,
@@ -12,23 +12,26 @@ enum Mode {
 }
 
 fn usage() {
-    eprintln!("usage: jass-rs [--ast|--dot|--html] <file.j>");
+    eprintln!("usage: jass-rs [--vjass] [--ast|--dot|--html] <file.j>");
     eprintln!("  (no flag)  lint the file and print diagnostics");
     eprintln!("  --ast      print the parsed AST as an indented tree");
     eprintln!("  --dot      print the parsed AST as a Graphviz DOT graph");
     eprintln!("  --html     print a self-contained AST viewer page (source + tree)");
+    eprintln!("  --vjass    read the vJASS dialect (embedded `//! zinc` blocks)");
     eprintln!();
     eprintln!("  e.g. jass-rs --html file.j > file.ast.html && open file.ast.html");
 }
 
 fn main() -> ExitCode {
     let mut mode = Mode::Lint;
+    let mut dialect = Dialect::Jass;
     let mut path = None;
     for arg in env::args().skip(1) {
         match arg.as_str() {
             "--ast" => mode = Mode::Ast,
             "--dot" => mode = Mode::Dot,
             "--html" => mode = Mode::Html,
+            "--vjass" => dialect = Dialect::VJass,
             "-h" | "--help" => {
                 usage();
                 return ExitCode::SUCCESS;
@@ -53,7 +56,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let program = match jass_rs::parse(&src) {
+    let program = match jass_rs::parse_with(&src, dialect) {
         Ok(program) => program,
         Err(err) => {
             eprintln!("{path}:{}:{}: error: {}", err.line, err.col, err.message);

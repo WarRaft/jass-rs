@@ -103,3 +103,13 @@ fn reports_invalid_rawcode_length() {
     let err = Lexer::tokenize("'ab'").unwrap_err();
     assert!(err.message.contains("4 characters"));
 }
+
+#[test]
+fn vjass_keywords_are_identifiers_in_plain_jass() {
+    let jass = Lexer::tokenize("library").unwrap();
+    assert_eq!(jass[0].kind, TokenKind::Ident("library".to_string()));
+
+    let vjass = parser_rs::tokenize("library /* c */", &VJASS_SPEC).unwrap();
+    assert_eq!(vjass[0].kind, TokenKind::Keyword(Kw::Library));
+    assert_eq!(vjass[1].kind, TokenKind::Eof);
+}

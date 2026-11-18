@@ -6,10 +6,14 @@
 //! Classification works on the (lossy) token stream rather than the AST so
 //! that half-typed, unparsable code still highlights. JASS's line-oriented
 //! grammar makes that reliable: every declaration has a fixed token shape.
+//!
+//! In the vJASS dialect, a `//! zinc` block is one token. Its directive
+//! lines are highlighted as `macro`, and its contents are handed to
+//! `zinc-rs`'s classifier, the same way the parser hands it the block.
 
 use std::collections::HashSet;
 
-use crate::lexer::SPEC;
+use crate::lexer::Dialect;
 use crate::token::{Kw, Punct, Token, TokenKind};
 use parser_rs::semantic::{self, comment_tokens, lexical_type};
 use parser_rs::{Modifiers, SemanticModifier as M, SemanticToken, SemanticType as T};
@@ -17,18 +21,34 @@ use parser_rs::{Modifiers, SemanticModifier as M, SemanticToken, SemanticType as
 /// The built-in primitive types (highlighted as `type.defaultLibrary`).
 const PRIMITIVES: &[&str] = &["integer", "real", "boolean", "string", "handle", "code"];
 
-/// Every semantic token in `src`, unencoded.
+/// Every semantic token in `src` (plain JASS), unencoded.
 pub fn semantic_tokens(src: &str) -> Vec<SemanticToken> {
-    let lexed = parser_rs::tokenize_lossy::<Kw>(src, &SPEC);
+    semantic_tokens_with(src, Dialect::Jass)
+}
+
+/// Every semantic token in `src` read as `dialect`, unencoded.
+pub fn semantic_tokens_with(src: &str, dialect: Dialect) -> Vec<SemanticToken> {
+    let lexed = parser_rs::tokenize_lossy(src, dialect.spec());
     let mut out = comment_tokens(&lexed.comments, src);
     Classifier::new(&lexed.tokens).run(&mut out);
     out
 }
 
-/// [`semantic_tokens`] in the editor's wire format (see
+/// [`semantic_tokens_with`] in the editor's wire format (see
 /// [`parser_rs::semantic::encode`]).
-pub fn encoded_semantic_tokens(src: &str) -> Vec<u32> {
-    semantic::encode(semantic_tokens(src), src)
+pub fn encoded_semantic_tokens(src: &str, dialect: Dialect) -> Vec<u32> {
+    semantic::encode(semantic_tokens_with(src, dialect), src)
+}
+
+/// An embedded block: its directives as `macro`, its contents by its own
+/// language's classifier.
+fn embedded_tokens(block: &parser_rs::Embedded, out: &mut Vec<SemanticToken>) {
+    for d in std::iter::once(block.open).chain(block.close) {
+        out.push(SemanticToken::new(d.start_line, d.start_col, d.end_col, T::Macro, Modifiers::NONE));
+    }
+    if block.lang == "zinc" {
+        out.extend(zinc_rs::semantic_tokens_at(&block.source, block.first_line));
+    }
 }
 
 /// File-wide names, collected up front since JASS globals and natives can
@@ -126,6 +146,7 @@ impl<'a> Classifier<'a> {
                             decl_kw = Some(i);
                         }
                         TokenKind::Keyword(Kw::EndFunction) => scope = None,
+                        TokenKind::Embedded(block) => embedded_tokens(block, out),
                         _ => {}
                     }
                     if let Some(ty) = lexical_type(kind) {

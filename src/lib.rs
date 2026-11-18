@@ -9,14 +9,21 @@ pub mod semantic;
 pub mod token;
 
 pub use ast::{ColumnEncoding, Program, Span};
+pub use lexer::Dialect;
 pub use html::render_html;
 pub use lint::{lint, Diagnostic, Level};
 pub use parser::{ParseError, Parser};
 pub use printer::{render_dot, render_tree};
 pub use query::{find_node_at, find_node_in, AstRef};
-pub use semantic::{encoded_semantic_tokens, semantic_tokens};
+pub use semantic::{encoded_semantic_tokens, semantic_tokens, semantic_tokens_with};
 
-/// Parses JASS source into an AST.
+/// Parses plain JASS source into an AST.
 pub fn parse(src: &str) -> Result<Program, ParseError> {
     Parser::parse_str(src)
+}
+
+/// Parses source in the given dialect. In [`Dialect::VJass`], `//! zinc`
+/// blocks are handed to `zinc-rs` and come back as [`ast::TopLevel::Zinc`].
+pub fn parse_with(src: &str, dialect: Dialect) -> Result<Program, ParseError> {
+    Parser::parse_str_with(src, dialect)
 }
