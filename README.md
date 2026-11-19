@@ -190,11 +190,27 @@ missing `return` in a function that declares a return type (warnings).
 
 ## Dialects and embedded Zinc
 
-`jass_rs::parse(src)` reads plain JASS. `jass_rs::parse_with(src,
-Dialect::VJass)` reads vJASS: the same parser with a bigger keyword set
-(`VJASS_KEYWORDS`), `/* */` comments, and **embedded Zinc**.
+Each file declares its dialect in its header, so a project can mix plain
+JASS, vJASS and (later) other dialects:
+
+| header                       | dialect                                                         |
+|------------------------------|-----------------------------------------------------------------|
+| *(none)*, or an unknown name | **plain JASS** (the default; `library` is a name, `//! zinc` a comment) |
+| `// @dialect vjass`          | **vJASS**: vJASS keywords, `/* */` comments, embedded Zinc      |
+| `// @dialect jass`           | plain JASS, stated explicitly                                   |
+
+Only the header (leading blank and comment lines) is read. The name is
+case-insensitive. A Chinese JASS dialect is planned as another
+`Dialect` with its own options.
+
+- **API.** `jass_rs::parse_file(src)` honours the header (`Dialect::detect`).
+  `jass_rs::parse(src)` is always plain JASS, and
+  `jass_rs::parse_with(src, dialect)` forces a dialect.
+- **vJASS** is the same parser with a bigger keyword set
+  (`VJASS_KEYWORDS`), `/* */` comments, and **embedded Zinc**.
 
 ```jass
+// @dialect vjass
 globals
     integer gCount = 0
 endglobals
@@ -222,7 +238,7 @@ endfunction
   unterminated block is an error at its `//! zinc` line.
 - **Plain JASS.** Here `//! zinc` is just a comment.
 
-The VS Code extension reads `.j` files as vJASS. See the
+The VS Code extension honours each file's header as well. See the
 [`parser-rs` design notes](../parser-rs/README.md#4-embedded-languages-one-token-then-hand-over-control)
 for how embedding works in general.
 
@@ -233,7 +249,8 @@ cargo run -- file.j            # lint
 cargo run -- --ast file.j      # indented AST tree
 cargo run -- --dot file.j      # Graphviz DOT
 cargo run -- --html file.j > file.ast.html && open file.ast.html
-cargo run -- --vjass file.j    # any mode, reading vJASS (embedded //! zinc)
+cargo run -- --vjass file.j    # force vJASS (default: the file's `// @dialect` header)
+cargo run -- --jass file.j     # force plain JASS
 ```
 
 ## Tests

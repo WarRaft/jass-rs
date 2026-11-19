@@ -22,6 +22,12 @@ pub fn parse(src: &str) -> Result<Program, ParseError> {
     Parser::parse_str(src)
 }
 
+/// Parses source in the dialect its header declares (`// @dialect vjass`),
+/// plain JASS by default. This is what tools should use for real files.
+pub fn parse_file(src: &str) -> Result<Program, ParseError> {
+    Parser::parse_str_with(src, Dialect::detect(src))
+}
+
 /// Parses source in the given dialect. In [`Dialect::VJass`], `//! zinc`
 /// blocks are handed to `zinc-rs` and come back as [`ast::TopLevel::Zinc`].
 pub fn parse_with(src: &str, dialect: Dialect) -> Result<Program, ParseError> {

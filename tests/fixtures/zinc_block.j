@@ -1,3 +1,4 @@
+// @dialect vjass
 globals
     integer gCount = 0
 endglobals

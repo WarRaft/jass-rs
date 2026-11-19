@@ -1,14 +1,18 @@
 use crate::token::{JASS_KEYWORDS, Token, VJASS_KEYWORDS};
-use parser_rs::{EmbedSpec, LexSpec, ParseError, Punct};
+use parser_rs::{EmbedSpec, LexSpec, NumberSpec, ParseError, Punct};
 
 /// JASS's lexical rules for the shared [`parser_rs::lexer`]: `//` comments
 /// only, rawcodes, and JASS's small operator set.
 pub const SPEC: LexSpec = LexSpec {
     keywords: JASS_KEYWORDS,
+    // JASS reals may start with the dot: `.5`
+    numbers: NumberSpec {
+        leading_dot: true,
+        ..LexSpec::BASE.numbers
+    },
     line_comment: "//",
     block_comment: None,
     rawcodes: true,
-    embeds: &[],
     puncts: &[
         Punct::Plus,
         Punct::Minus,
@@ -27,6 +31,7 @@ pub const SPEC: LexSpec = LexSpec {
         Punct::RBracket,
         Punct::Comma,
     ],
+    ..LexSpec::BASE
 };
 
 /// A `//! zinc` ... `//! endzinc` block: Zinc embedded in vJASS. The lexer
@@ -50,6 +55,10 @@ pub const VJASS_SPEC: LexSpec = LexSpec {
 };
 
 /// Which JASS dialect to read; it picks the [`LexSpec`].
+///
+/// Chosen **per file**, so one project can mix plain JASS, vJASS (with
+/// embedded Zinc), and later other dialects. A file is plain JASS unless
+/// its header says otherwise (see [`Dialect::detect`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Dialect {
     /// Plain JASS: `//! zinc` is just a comment, `library` is a name.
@@ -60,6 +69,35 @@ pub enum Dialect {
 }
 
 impl Dialect {
+    /// The header key: `// @dialect <name>`.
+    pub const DIRECTIVE: &'static str = "dialect";
+
+    /// The dialect a file declares in its header (`// @dialect vjass`; see
+    /// [`parser_rs::directive`]). Plain JASS if there's no declaration or
+    /// the name is unknown: the base language is the default, and a file
+    /// opts *into* extensions.
+    pub fn detect(src: &str) -> Dialect {
+        parser_rs::header_directive(src, SPEC.line_comment, Dialect::DIRECTIVE)
+            .and_then(Dialect::from_name)
+            .unwrap_or_default()
+    }
+
+    /// The dialect named `name` (case-insensitive): `jass` or `vjass`.
+    pub fn from_name(name: &str) -> Option<Dialect> {
+        match name.to_ascii_lowercase().as_str() {
+            "jass" => Some(Dialect::Jass),
+            "vjass" => Some(Dialect::VJass),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Dialect::Jass => "jass",
+            Dialect::VJass => "vjass",
+        }
+    }
+
     pub fn spec(self) -> &'static LexSpec {
         match self {
             Dialect::Jass => &SPEC,

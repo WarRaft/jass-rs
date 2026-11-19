@@ -47,9 +47,8 @@ fn html_dump_matches_snapshot() {
             .to_string();
         let source = fs::read_to_string(&source_path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", source_path.display()));
-        // vJASS reads plain JASS fixtures identically and also covers
-        // embedded `//! zinc` blocks.
-        let program = parse_with(&source, Dialect::VJass)
+        // Each fixture declares its own dialect, like a real file.
+        let program = parse_with(&source, Dialect::detect(&source))
             .unwrap_or_else(|e| panic!("{} should parse: {e:?}", source_path.display()));
         let actual = render_html(&program, &source, &file_name);
         let snapshot_path = source_path.with_extension("ast.html");

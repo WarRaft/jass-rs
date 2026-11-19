@@ -12,26 +12,29 @@ enum Mode {
 }
 
 fn usage() {
-    eprintln!("usage: jass-rs [--vjass] [--ast|--dot|--html] <file.j>");
+    eprintln!("usage: jass-rs [--jass|--vjass] [--ast|--dot|--html] <file.j>");
     eprintln!("  (no flag)  lint the file and print diagnostics");
     eprintln!("  --ast      print the parsed AST as an indented tree");
     eprintln!("  --dot      print the parsed AST as a Graphviz DOT graph");
     eprintln!("  --html     print a self-contained AST viewer page (source + tree)");
-    eprintln!("  --vjass    read the vJASS dialect (embedded `//! zinc` blocks)");
+    eprintln!("  --jass     force plain JASS");
+    eprintln!("  --vjass    force vJASS (embedded `//! zinc` blocks)");
+    eprintln!("             (default: the file's `// @dialect` header, else plain JASS)");
     eprintln!();
     eprintln!("  e.g. jass-rs --html file.j > file.ast.html && open file.ast.html");
 }
 
 fn main() -> ExitCode {
     let mut mode = Mode::Lint;
-    let mut dialect = Dialect::Jass;
+    let mut dialect = None;
     let mut path = None;
     for arg in env::args().skip(1) {
         match arg.as_str() {
             "--ast" => mode = Mode::Ast,
             "--dot" => mode = Mode::Dot,
             "--html" => mode = Mode::Html,
-            "--vjass" => dialect = Dialect::VJass,
+            "--jass" => dialect = Some(Dialect::Jass),
+            "--vjass" => dialect = Some(Dialect::VJass),
             "-h" | "--help" => {
                 usage();
                 return ExitCode::SUCCESS;
@@ -56,6 +59,7 @@ fn main() -> ExitCode {
         }
     };
 
+    let dialect = dialect.unwrap_or_else(|| Dialect::detect(&src));
     let program = match jass_rs::parse_with(&src, dialect) {
         Ok(program) => program,
         Err(err) => {
