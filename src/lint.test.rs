@@ -137,7 +137,11 @@ endfunction
 
 #[test]
 fn top_level_globals_are_fine_and_checked_for_duplicates() {
-    let diags = lint_src("integer x = 1\nglobals\n    integer y\nendglobals\nreal x");
+    let (diags, pure): (Vec<_>, Vec<_>) = lint_src("integer x = 1\nglobals\n    integer y\nendglobals\nreal x")
+        .into_iter()
+        .partition(|d| d.rule != rule::GLOBAL_OUTSIDE_GLOBALS);
+    // Only pure JASS (off by default) objects to them.
+    assert_eq!(pure.iter().map(|d| d.line).collect::<Vec<_>>(), vec![1, 5]);
     assert_eq!(diags.len(), 1, "{diags:?}");
     assert_eq!(diags[0].line, 5);
     assert!(diags[0].message.contains("duplicate global variable 'x' (first declared at line 1)"));
@@ -186,4 +190,98 @@ fn a_debug_statement_at_the_top_level_is_reported_like_its_statement() {
     let program = Parser::parse_str("debug call F()").expect("parses");
     let diags = lint(&program);
     assert!(diags.iter().any(|d| d.message == "'call' statement outside a function: move it into a function"), "{diags:?}");
+}
+
+#[test]
+fn implicit_signature_names_what_is_left_out() {
+    let src = "\
+native N
+native M takes integer i
+function A
+endfunction
+function B takes integer x
+endfunction
+constant function C returns integer
+    return 1
+endfunction
+function D takes nothing returns nothing
+endfunction
+";
+    let found: Vec<(usize, String)> = lint_src(src)
+        .into_iter()
+        .filter(|d| d.rule == rule::IMPLICIT_SIGNATURE)
+        .map(|d| {
+            assert_eq!(d.level, Level::Error);
+            (d.line, d.message)
+        })
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (1, "native 'N' leaves out 'takes nothing returns nothing', which the game requires".to_string()),
+            (2, "native 'M' leaves out 'returns nothing', which the game requires".to_string()),
+            (3, "function 'A' leaves out 'takes nothing returns nothing', which the game requires".to_string()),
+            (5, "function 'B' leaves out 'returns nothing', which the game requires".to_string()),
+            (7, "function 'C' leaves out 'takes nothing', which the game requires".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn an_implicit_signature_is_still_checked_like_a_written_one() {
+    // `returns integer` without `takes`: still needs a return.
+    let diags = lint_src("function F returns integer
+endfunction
+");
+    assert!(diags.iter().any(|d| d.rule == rule::MISSING_RETURN), "{diags:?}");
+    // Parameters without `returns` are still parameters.
+    let diags = lint_src("function G takes integer x
+    local integer x
+endfunction
+");
+    assert!(diags.iter().any(|d| d.message.contains("duplicate")), "{diags:?}");
+}
+
+#[test]
+fn pure_jass_declaration_order() {
+    let src = "\
+type mytype extends handle
+integer early = 1
+globals
+    integer g
+endglobals
+function F takes nothing returns nothing
+endfunction
+integer late
+globals
+    real r
+endglobals
+globals
+endglobals
+native N takes nothing returns nothing
+type other extends handle
+function G takes nothing returns nothing
+endfunction
+";
+    let found: Vec<(&str, usize, String)> = lint_src(src)
+        .into_iter()
+        .filter(|d| d.rule == rule::DECLARATION_AFTER_FUNCTION || d.rule == rule::GLOBAL_OUTSIDE_GLOBALS)
+        .map(|d| {
+            assert_eq!(d.level, Level::Error);
+            (d.rule, d.line, d.message)
+        })
+        .collect();
+    let after = |what: &str| format!("{what} comes after a function (line 6): the game reads declarations only before the first function");
+    let outside = |name: &str| format!("global '{name}' is declared outside 'globals ... endglobals', where the game doesn't read it");
+    assert_eq!(
+        found,
+        vec![
+            (rule::GLOBAL_OUTSIDE_GLOBALS, 2, outside("early")),
+            (rule::GLOBAL_OUTSIDE_GLOBALS, 8, outside("late")),
+            (rule::DECLARATION_AFTER_FUNCTION, 8, after("global 'late'")),
+            (rule::DECLARATION_AFTER_FUNCTION, 10, after("'globals' block")),
+            (rule::DECLARATION_AFTER_FUNCTION, 14, after("native 'N'")),
+            (rule::DECLARATION_AFTER_FUNCTION, 15, after("type 'other'")),
+        ]
+    );
 }

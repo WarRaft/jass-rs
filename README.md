@@ -85,12 +85,36 @@ constant native GetTriggerUnit takes nothing returns unit
 #### What this toolchain accepts at the top level
 
 The grammar above is what the game reads. Source files here are built
-into it, so the top level is more relaxed:
+into it, so the top level is more relaxed. Each relaxation that the game
+itself would reject is reported by a rule in the lint group `pure`, off
+by default: a project that must stay pure JASS turns it on with
+`pure=error` in `[lint]` of `wc3.bni`.
+
+- **`takes` and `returns` may be left out** of a `function` or `native`:
+  left out, they mean `takes nothing` and `returns nothing`. Either one
+  can be written alone. The game requires both (rule
+  `implicit-signature`, group `pure`).
+
+  ```jass
+  function Init                        // = takes nothing returns nothing
+  endfunction
+  function Count takes unit u          // = ... returns nothing
+  endfunction
+  function Seed returns integer        // = takes nothing returns integer
+      return 42
+  endfunction
+  ```
 
 - **Variables may be declared at the top level**, outside `globals` and
   anywhere among the functions. When the map is built they go into the
   `globals` block, so they're ordinary globals: same syntax, same rules,
-  and duplicates are checked across both forms.
+  and duplicates are checked across both forms. The game reads variables
+  only inside `globals` (rule `global-outside-globals`, group `pure`).
+- **Declarations may come after functions.** A variable, a `globals`
+  block, a `native` or a `type` may follow a function. The game reads
+  them only before the first function (rule `declaration-after-function`,
+  group `pure`; an empty `globals` block declares nothing and isn't
+  reported).
 
   ```jass
   integer counter = 0                  // = a line in globals ... endglobals
@@ -126,7 +150,8 @@ endfunction
 ```
 
 - `takes nothing` means no parameters; `returns nothing` means no return
-  value.
+  value. The game requires both written out; this toolchain lets you
+  leave them out (see below).
 - A function can only call functions declared **above** it. There are no
   forward declarations, and natives count as declared first.
 - A non-`nothing` function must `return` a value on every path.
@@ -214,7 +239,6 @@ Supported: everything in the reference above **except**:
 |-------------------------------------------|---------------------------------------------------------|
 | `\r \b \f` escapes                        | decoded as the bare letter                              |
 | locals-first rule                         | `local` is accepted anywhere in a body                  |
-| declarations-before-functions order       | top-level items may be interleaved (on purpose for variables; see [the top level](#what-this-toolchain-accepts-at-the-top-level)) |
 | type checking / declare-before-use        | no symbol or type resolution yet                        |
 | vJASS                                     | `Dialect::VJass` = JASS + vJASS keywords + `/* */` + `//! zinc` blocks; `library`/`struct`/... grammar not yet |
 

@@ -9,10 +9,15 @@ use parser_rs::rule;
 pub fn lint(program: &Program) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     check_duplicate_top_level_names(program, &mut diags);
+    check_declaration_order(program, &mut diags);
     check_duplicate_global_names(program, &mut diags);
     for item in &program.items {
         match item {
-            TopLevel::Function(f) => check_function(f, &mut diags),
+            TopLevel::Function(f) => {
+                check_signature(&f.sig, "function", &mut diags);
+                check_function(f, &mut diags);
+            }
+            TopLevel::Native(sig) => check_signature(sig, "native", &mut diags),
             // Zinc blocks are linted by Zinc's own rules.
             TopLevel::Zinc(block) => diags.extend(zinc_rs::lint(&block.program)),
             TopLevel::Stmt(s) => diags.push(Diagnostic::error(rule::STATEMENT_OUTSIDE_FUNCTION, top_level_stmt_message(s), stmt_line(s))),
@@ -98,6 +103,62 @@ fn check_duplicate_top_level_names(program: &Program, diags: &mut Vec<Diagnostic
             seen.insert(name.clone(), line);
         }
     }
+}
+
+/// `declaration-after-function` and `global-outside-globals`: the game
+/// reads declarations (`type`, `globals`, `native`) only before the first
+/// function, and variables only inside `globals`. This toolchain accepts
+/// both anywhere at the top level. An empty `globals` block has no line to
+/// report and declares nothing, so it isn't reported.
+fn check_declaration_order(program: &Program, diags: &mut Vec<Diagnostic>) {
+    let mut first_function: Option<usize> = None;
+    for item in &program.items {
+        let (what, line) = match item {
+            TopLevel::Function(f) => {
+                first_function.get_or_insert(f.sig.line);
+                continue;
+            }
+            TopLevel::Global(d) => {
+                diags.push(Diagnostic::error(
+                    rule::GLOBAL_OUTSIDE_GLOBALS,
+                    format!("global '{}' is declared outside 'globals ... endglobals', where the game doesn't read it", d.name),
+                    d.line,
+                ));
+                (format!("global '{}'", d.name), d.line)
+            }
+            TopLevel::Globals(decls) => match decls.first() {
+                Some(d) => ("'globals' block".to_string(), d.line),
+                None => continue,
+            },
+            TopLevel::Native(sig) => (format!("native '{}'", sig.name), sig.line),
+            TopLevel::TypeDef { name, line, .. } => (format!("type '{name}'"), *line),
+            TopLevel::Stmt(_) | TopLevel::Zinc(_) => continue,
+        };
+        if let Some(f) = first_function {
+            diags.push(Diagnostic::error(
+                rule::DECLARATION_AFTER_FUNCTION,
+                format!("{what} comes after a function (line {f}): the game reads declarations only before the first function"),
+                line,
+            ));
+        }
+    }
+}
+
+/// `implicit-signature`: `takes` / `returns` left out. This toolchain
+/// reads them as `takes nothing` / `returns nothing`; the game requires
+/// them written.
+fn check_signature(sig: &FunctionSig, what: &str, diags: &mut Vec<Diagnostic>) {
+    let missing = match (sig.has_takes, sig.has_returns) {
+        (true, true) => return,
+        (false, false) => "'takes nothing returns nothing'",
+        (false, true) => "'takes nothing'",
+        (true, false) => "'returns nothing'",
+    };
+    diags.push(Diagnostic::error(
+        rule::IMPLICIT_SIGNATURE,
+        format!("{what} '{}' leaves out {missing}, which the game requires", sig.name),
+        sig.line,
+    ));
 }
 
 fn check_function(f: &FunctionDecl, diags: &mut Vec<Diagnostic>) {

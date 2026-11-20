@@ -185,8 +185,12 @@ impl Parser {
 
     fn function_sig(&mut self, is_constant: bool, line: usize) -> Result<FunctionSig, ParseError> {
         let name = self.expect_identifier()?;
-        self.expect(TokenKind::Keyword(Kw::Takes))?;
-        let params = if self.check(&TokenKind::Keyword(Kw::Nothing)) {
+        // `takes` and `returns` may be left out: `function F` is
+        // `function F takes nothing returns nothing`.
+        let has_takes = self.ts.eat(&TokenKind::Keyword(Kw::Takes));
+        let params = if !has_takes {
+            Vec::new()
+        } else if self.check(&TokenKind::Keyword(Kw::Nothing)) {
             self.advance();
             Vec::new()
         } else {
@@ -197,8 +201,10 @@ impl Parser {
             }
             params
         };
-        self.expect(TokenKind::Keyword(Kw::Returns))?;
-        let returns = if self.check(&TokenKind::Keyword(Kw::Nothing)) {
+        let has_returns = self.ts.eat(&TokenKind::Keyword(Kw::Returns));
+        let returns = if !has_returns {
+            None
+        } else if self.check(&TokenKind::Keyword(Kw::Nothing)) {
             self.advance();
             None
         } else {
@@ -210,6 +216,8 @@ impl Parser {
             returns,
             is_constant,
             line,
+            has_takes,
+            has_returns,
         })
     }
 

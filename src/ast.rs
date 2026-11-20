@@ -75,6 +75,12 @@ pub struct FunctionSig {
     pub returns: Option<String>,
     pub is_constant: bool,
     pub line: usize,
+    /// Whether `takes ...` is written. Omitted means `takes nothing`,
+    /// which this toolchain accepts and the game doesn't
+    /// (`implicit-signature`).
+    pub has_takes: bool,
+    /// Whether `returns ...` is written. Omitted means `returns nothing`.
+    pub has_returns: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -296,3 +296,31 @@ fn parses_unary_plus() {
         other => panic!("expected a call, got {other:?}"),
     }
 }
+
+#[test]
+fn takes_and_returns_may_be_left_out() {
+    let sig = |src: &str| match Parser::parse_str(src).unwrap().items.remove(0) {
+        TopLevel::Function(f) => f.sig,
+        TopLevel::Native(sig) => sig,
+        other => panic!("expected a function, got {other:?}"),
+    };
+    let s = sig("function main\n    call Init()\nendfunction");
+    assert_eq!((s.params.len(), s.returns.clone(), s.has_takes, s.has_returns), (0, None, false, false));
+
+    let s = sig("function F takes integer a, real b\nendfunction");
+    assert_eq!((s.params.len(), s.returns.clone(), s.has_takes, s.has_returns), (2, None, true, false));
+
+    let s = sig("constant function G returns integer\n    return 1\nendfunction");
+    assert_eq!((s.params.len(), s.returns.clone(), s.has_takes, s.has_returns), (0, Some("integer".into()), false, true));
+    assert!(s.is_constant);
+
+    let s = sig("native N\nnative M takes nothing returns nothing");
+    assert_eq!((s.name.as_str(), s.has_takes, s.has_returns), ("N", false, false));
+
+    let s = sig("function H takes nothing returns nothing\nendfunction");
+    assert_eq!((s.has_takes, s.has_returns), (true, true));
+
+    // A one-line function with nothing after the name.
+    let prog = Parser::parse_str("function A\nendfunction\nfunction B\nendfunction").unwrap();
+    assert_eq!(prog.items.len(), 2);
+}

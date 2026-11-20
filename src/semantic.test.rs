@@ -191,3 +191,27 @@ endfunction
     let l = symbols(src, Dialect::VJass).into_iter().find(|o| o.name == "L").unwrap();
     assert_eq!((l.kind, l.scope), (K::Library, Scope::Project));
 }
+
+#[test]
+fn functions_without_takes_or_returns_are_indexed() {
+    let src = "function F\n    local integer x = 1\n    call G(x)\nendfunction\nfunction G takes integer a\n    set a = a + 1\nendfunction\n";
+    let syms: Vec<_> = symbols(src, Dialect::Jass)
+        .into_iter()
+        .map(|o| (o.name, o.line, o.kind, o.declaration, o.scope))
+        .collect();
+    let (f, g) = (Scope::Local(1), Scope::Local(2));
+    let p = Scope::Project;
+    assert_eq!(
+        syms,
+        vec![
+            ("F".to_string(), 1, K::Function, true, p),
+            ("x".to_string(), 2, K::Local, true, f),
+            ("G".to_string(), 3, K::Function, false, p),
+            ("x".to_string(), 3, K::Local, false, f),
+            ("G".to_string(), 5, K::Function, true, p),
+            ("a".to_string(), 5, K::Parameter, true, g),
+            ("a".to_string(), 6, K::Parameter, false, g),
+            ("a".to_string(), 6, K::Parameter, false, g),
+        ]
+    );
+}
