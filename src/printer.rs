@@ -141,6 +141,7 @@ fn stmt_node(s: &Stmt) -> Node {
             branches,
             else_branch,
             line,
+            ..
         } => {
             let mut children = Vec::new();
             for (i, (cond, body)) in branches.iter().enumerate() {

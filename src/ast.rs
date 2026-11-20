@@ -113,6 +113,10 @@ pub enum Stmt {
         branches: Vec<(Expr, Vec<Stmt>)>,
         else_branch: Option<Vec<Stmt>>,
         line: usize,
+        /// The `else` keyword, when there's an `else` branch.
+        else_span: Option<Span>,
+        /// The line of `endif`.
+        end_line: usize,
     },
     Loop {
         body: Vec<Stmt>,

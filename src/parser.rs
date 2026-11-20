@@ -351,6 +351,7 @@ impl Parser {
         branches.push((cond, body));
 
         let mut else_branch = None;
+        let mut else_span = None;
         loop {
             match self.peek_kind() {
                 TokenKind::Keyword(Kw::ElseIf) => {
@@ -362,7 +363,7 @@ impl Parser {
                     branches.push((cond, body));
                 }
                 TokenKind::Keyword(Kw::Else) => {
-                    self.advance();
+                    else_span = Some(self.advance().span());
                     let body = self.stmt_block(&[TokenKind::Keyword(Kw::EndIf)])?;
                     else_branch = Some(body);
                     break;
@@ -371,11 +372,13 @@ impl Parser {
                 _ => return Err(self.error("expected 'elseif', 'else', or 'endif'")),
             }
         }
-        self.expect(TokenKind::Keyword(Kw::EndIf))?;
+        let end_line = self.expect(TokenKind::Keyword(Kw::EndIf))?.line;
         Ok(Stmt::If {
             branches,
             else_branch,
             line,
+            else_span,
+            end_line,
         })
     }
 

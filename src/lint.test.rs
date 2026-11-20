@@ -285,3 +285,16 @@ endfunction
         ]
     );
 }
+
+#[test]
+fn an_empty_else_is_marked_on_else_and_its_fix_deletes_it() {
+    let src = "function F takes nothing returns nothing\n    if true then\n        call F()\n    else\n        // nothing\n    endif\nendfunction";
+    let d = lint_src(src).into_iter().find(|d| d.message == "empty 'else' branch").expect("reported");
+    assert_eq!(d.line, 4);
+    assert_eq!(d.span, Some(Span::new(4, 5, 4, 9)));
+    let fix = d.fix.expect("a fix");
+    assert_eq!(fix.edits.len(), 1);
+    // From the start of the `else` line up to the `endif` line.
+    assert_eq!(fix.edits[0].span, Span::new(4, 1, 6, 1));
+    assert_eq!(fix.edits[0].text, "");
+}

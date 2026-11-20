@@ -2,7 +2,7 @@ use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
 pub use parser_rs::{Diagnostic, Level};
-use parser_rs::rule;
+use parser_rs::{rule, Fix};
 
 /// Runs every lint rule over a parsed program and returns the diagnostics
 /// found, sorted by source line.
@@ -248,6 +248,8 @@ fn check_stmts(stmts: &[Stmt], diags: &mut Vec<Diagnostic>) {
                 branches,
                 else_branch,
                 line,
+                else_span,
+                end_line,
             } => {
                 for (_, body) in branches {
                     if body.is_empty() {
@@ -257,7 +259,7 @@ fn check_stmts(stmts: &[Stmt], diags: &mut Vec<Diagnostic>) {
                 }
                 if let Some(body) = else_branch {
                     if body.is_empty() {
-                        diags.push(Diagnostic::warning(rule::EMPTY_BRANCH, "empty 'else' branch", *line));
+                        diags.push(empty_else(*else_span, *line, *end_line));
                     }
                     check_stmts(body, diags);
                 }
@@ -265,6 +267,16 @@ fn check_stmts(stmts: &[Stmt], diags: &mut Vec<Diagnostic>) {
             Stmt::Debug { stmt, .. } => check_stmts(std::slice::from_ref(stmt), diags),
             _ => {}
         }
+    }
+}
+
+/// An empty `else`, marked on the keyword, with a fix that deletes it:
+/// every line from `else` up to `endif`.
+fn empty_else(else_span: Option<Span>, if_line: usize, end_line: usize) -> Diagnostic {
+    let d = Diagnostic::warning(rule::EMPTY_BRANCH, "empty 'else' branch", if_line);
+    match else_span {
+        Some(kw) => d.at(kw).with_fix(Fix::delete("Remove empty 'else'", Span::new(kw.start_line, 1, end_line, 1))),
+        None => d,
     }
 }
 
