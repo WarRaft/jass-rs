@@ -43,6 +43,8 @@ fn top_level_line(item: &TopLevel) -> usize {
         // Never itself returned by a search (only its children are), so
         // this placeholder is never actually observed.
         TopLevel::Globals(_) => 0,
+        TopLevel::Global(d) => d.line,
+        TopLevel::Stmt(s) => stmt_line(s),
         TopLevel::TypeDef { line, .. } => *line,
         TopLevel::Native(sig) => sig.line,
         TopLevel::Function(f) => f.sig.line,
@@ -58,7 +60,8 @@ fn stmt_line(s: &Stmt) -> usize {
         | Stmt::If { line, .. }
         | Stmt::Loop { line, .. }
         | Stmt::ExitWhen { line, .. }
-        | Stmt::Return { line, .. } => *line,
+        | Stmt::Return { line, .. }
+        | Stmt::Debug { line, .. } => *line,
     }
 }
 
@@ -116,6 +119,9 @@ fn find_in_top_level<'a>(
                 )
             })
         }),
+        TopLevel::Global(d) => find_in_expr_opt(d.initializer.as_ref(), line, sc, ec)
+            .or_else(|| self_or_none(AstRef::GlobalDecl(d), Span::whole_line(d.line), line, sc, ec)),
+        TopLevel::Stmt(s) => find_in_stmt(s, line, sc, ec),
         TopLevel::TypeDef { line: l, .. } => {
             self_or_none(AstRef::TopLevel(item), Span::whole_line(*l), line, sc, ec)
         }
@@ -167,6 +173,7 @@ fn find_in_stmt<'a>(s: &'a Stmt, line: usize, sc: usize, ec: usize) -> Option<As
         Stmt::Loop { body, .. } => body.iter().find_map(|st| find_in_stmt(st, line, sc, ec)),
         Stmt::ExitWhen { cond, .. } => find_in_expr(cond, line, sc, ec),
         Stmt::Return { value, .. } => find_in_expr_opt(value.as_ref(), line, sc, ec),
+        Stmt::Debug { stmt, .. } => find_in_stmt(stmt, line, sc, ec),
     };
     child_hit.or_else(|| self_or_none(AstRef::Stmt(s), own, line, sc, ec))
 }

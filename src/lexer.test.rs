@@ -39,6 +39,53 @@ fn tokenizes_identifiers_and_numbers() {
 }
 
 #[test]
+fn reals_may_start_or_end_with_the_dot() {
+    assert_eq!(
+        kinds("f(2144.,-5184.,.5)"),
+        vec![
+            TokenKind::Ident("f".to_string()),
+            TokenKind::Punct(Punct::LParen),
+            TokenKind::Real(2144.0),
+            TokenKind::Punct(Punct::Comma),
+            TokenKind::Punct(Punct::Minus),
+            TokenKind::Real(5184.0),
+            TokenKind::Punct(Punct::Comma),
+            TokenKind::Real(0.5),
+            TokenKind::Punct(Punct::RParen),
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn a_leading_zero_is_octal() {
+    assert_eq!(
+        kinds("017 0 0.5"),
+        vec![TokenKind::Int(15), TokenKind::Int(0), TokenKind::Real(0.5), TokenKind::Eof]
+    );
+    let err = Lexer::tokenize("09").unwrap_err();
+    assert!(err.message.contains("invalid octal literal '09'"));
+}
+
+#[test]
+fn dollar_hex_integers() {
+    assert_eq!(
+        kinds("f(x,$A,$984)"),
+        vec![
+            TokenKind::Ident("f".to_string()),
+            TokenKind::Punct(Punct::LParen),
+            TokenKind::Ident("x".to_string()),
+            TokenKind::Punct(Punct::Comma),
+            TokenKind::Int(10),
+            TokenKind::Punct(Punct::Comma),
+            TokenKind::Int(0x984),
+            TokenKind::Punct(Punct::RParen),
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
 fn tokenizes_string_literal_with_escapes() {
     assert_eq!(
         kinds(r#""hello\nworld""#),
@@ -52,8 +99,8 @@ fn tokenizes_string_literal_with_escapes() {
 #[test]
 fn tokenizes_rawcode_literal() {
     assert_eq!(
-        kinds("'hfoo'"),
-        vec![TokenKind::Int(0x68666f6f), TokenKind::Eof,]
+        kinds("'hfoo' 'd'"),
+        vec![TokenKind::Int(0x68666f6f), TokenKind::Int(100), TokenKind::Eof,]
     );
 }
 
@@ -101,7 +148,7 @@ fn reports_unterminated_string() {
 #[test]
 fn reports_invalid_rawcode_length() {
     let err = Lexer::tokenize("'ab'").unwrap_err();
-    assert!(err.message.contains("4 characters"));
+    assert!(err.message.contains("must be 1 or 4 characters"));
 }
 
 #[test]

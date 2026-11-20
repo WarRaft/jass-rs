@@ -190,3 +190,109 @@ fn reports_error_on_unknown_top_level_token() {
     let err = Parser::parse_str("42").unwrap_err();
     assert!(err.message.contains("unexpected top-level token"));
 }
+
+#[test]
+fn parses_globals_declared_at_top_level() {
+    let src = "integer x = 1\nfunction F takes nothing returns nothing\nendfunction\nconstant real PI = 3.14\nunit array units";
+    let prog = Parser::parse_str(src).unwrap();
+    let globals: Vec<(&str, bool, bool, usize)> = prog
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            TopLevel::Global(d) => Some((d.name.as_str(), d.is_constant, d.is_array, d.line)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(globals, [("x", false, false, 1), ("PI", true, false, 4), ("units", false, true, 5)]);
+}
+
+#[test]
+fn reads_statements_at_top_level_in_full() {
+    let src = "if x then\n    call F()\nendif\nset y = 1\nfunction G takes nothing returns nothing\nendfunction";
+    let prog = Parser::parse_str(src).unwrap();
+    assert!(matches!(&prog.items[0], TopLevel::Stmt(Stmt::If { branches, .. }) if branches[0].1.len() == 1));
+    assert!(matches!(&prog.items[1], TopLevel::Stmt(Stmt::Set { .. })));
+    assert!(matches!(&prog.items[2], TopLevel::Function(_)));
+}
+
+#[test]
+fn parses_constant_function() {
+    let prog = Parser::parse_str("constant function F takes nothing returns integer\n    return 1\nendfunction").unwrap();
+    match &prog.items[0] {
+        TopLevel::Function(f) => assert!(f.sig.is_constant),
+        other => panic!("expected a function, got {other:?}"),
+    }
+}
+
+/// The body of the only function in `src`.
+fn body(src: &str) -> Vec<Stmt> {
+    match Parser::parse_str(src).unwrap().items.into_iter().next() {
+        Some(TopLevel::Function(f)) => f.body,
+        other => panic!("expected a function, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_debug_statements() {
+    // The forms the game's own AI scripts use.
+    let src = "\
+function F takes nothing returns nothing
+    debug call Trace(\"x\")
+    debug set x = 1
+    debug if a then
+        set x = 2
+    endif
+    debug loop
+        exitwhen true
+    endloop
+endfunction";
+    let stmts = body(src);
+    let got: Vec<(usize, &str)> = stmts
+        .iter()
+        .map(|s| match s {
+            Stmt::Debug { stmt, line } => (
+                *line,
+                match stmt.as_ref() {
+                    Stmt::Call { .. } => "call",
+                    Stmt::Set { .. } => "set",
+                    Stmt::If { .. } => "if",
+                    Stmt::Loop { .. } => "loop",
+                    other => panic!("unexpected {other:?}"),
+                },
+            ),
+            other => panic!("expected debug, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(got, vec![(2, "call"), (3, "set"), (4, "if"), (7, "loop")]);
+}
+
+/// One statement, parsed alone in a function.
+fn stmts_of(stmt: &str) -> Stmt {
+    body(&format!("function F takes nothing returns nothing\n    {stmt}\nendfunction"))
+        .into_iter()
+        .next()
+        .unwrap()
+}
+
+#[test]
+fn debug_only_precedes_set_call_if_or_loop() {
+    for bad in ["debug local integer x", "debug return", "debug exitwhen true", "debug debug call F()"] {
+        let src = format!("function F takes nothing returns nothing\n    {bad}\nendfunction");
+        let err = Parser::parse_str(&src).unwrap_err();
+        assert!(err.message.contains("'debug' can only precede"), "{bad}: {}", err.message);
+        assert_eq!((err.line, err.col), (2, 11), "{bad}");
+    }
+}
+
+#[test]
+fn parses_unary_plus() {
+    // As in the game's u08x02.ai: `call attack_move(+OFFSET_X,+OFFSET_Y)`.
+    match stmts_of("call attack_move(+OFFSET_X, -+1)") {
+        Stmt::Call { args, .. } => {
+            assert!(matches!(&args[0].kind, ExprKind::Unary(UnaryOp::Plus, inner) if matches!(inner.kind, ExprKind::Var(_))));
+            assert_eq!((args[0].span.start_col, args[0].span.end_col), (22, 31));
+            assert!(matches!(&args[1].kind, ExprKind::Unary(UnaryOp::Neg, inner) if matches!(inner.kind, ExprKind::Unary(UnaryOp::Plus, _))));
+        }
+        other => panic!("expected a call, got {other:?}"),
+    }
+}

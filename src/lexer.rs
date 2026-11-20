@@ -5,9 +5,13 @@ use parser_rs::{EmbedSpec, LexSpec, NumberSpec, ParseError, Punct};
 /// only, rawcodes, and JASS's small operator set.
 pub const SPEC: LexSpec = LexSpec {
     keywords: JASS_KEYWORDS,
-    // JASS reals may start with the dot: `.5`
+    // JASS reals may start or end with the dot: `.5`, `2144.`; hex may
+    // be `$1F`; a leading 0 is octal: `017`.
     numbers: NumberSpec {
         leading_dot: true,
+        trailing_dot: true,
+        leading_zero_octal: true,
+        dollar_hex: true,
         ..LexSpec::BASE.numbers
     },
     line_comment: "//",
@@ -77,9 +81,15 @@ impl Dialect {
     /// the name is unknown: the base language is the default, and a file
     /// opts *into* extensions.
     pub fn detect(src: &str) -> Dialect {
+        Dialect::declared(src).unwrap_or_default()
+    }
+
+    /// The dialect a file's header declares, if it names a known one.
+    /// `None` lets the caller choose the fallback, such as the project
+    /// default from `wc3.bni` in the editor.
+    pub fn declared(src: &str) -> Option<Dialect> {
         parser_rs::header_directive(src, SPEC.line_comment, Dialect::DIRECTIVE)
             .and_then(Dialect::from_name)
-            .unwrap_or_default()
     }
 
     /// The dialect named `name` (case-insensitive): `jass` or `vjass`.

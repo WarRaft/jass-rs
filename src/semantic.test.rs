@@ -1,5 +1,6 @@
 use super::*;
 use parser_rs::SemanticModifier as M;
+use parser_rs::{Scope, SymbolKind as K};
 
 const SRC: &str = "\
 globals
@@ -100,4 +101,93 @@ fn encodes_for_the_editor() {
     assert_eq!(data.len(), 4 * 5);
     assert_eq!(&data[..5], &[0, 0, 3, T::Keyword.index(), 0]);
     assert_eq!(&data[5..10], &[0, 4, 1, T::Variable.index(), M::Modification.bit()]);
+}
+
+#[test]
+fn classifies_top_level_globals() {
+    let src = "constant integer LIMIT = 5\nunit hero\nfunction F takes nothing returns nothing\n    set hero = null\n    call F(LIMIT)\nendfunction";
+    let toks = semantic_tokens(src);
+    let at = |line, col| toks.iter().find(|t| t.line == line && t.start_col == col).map(|t| (t.ty, t.mods));
+    assert_eq!(at(1, 18), Some((T::Variable, m(&[M::Declaration, M::Readonly]))));
+    assert_eq!(at(2, 1), Some((T::Type, m(&[]))));
+    assert_eq!(at(2, 6), Some((T::Variable, m(&[M::Declaration]))));
+    assert_eq!(at(4, 9), Some((T::Variable, m(&[M::Modification]))));
+    assert_eq!(at(5, 12), Some((T::Variable, m(&[M::Readonly]))));
+}
+
+/// Every occurrence of `name` as (line, kind, declaration, scope).
+fn occurrences(name: &str) -> Vec<(usize, K, bool, Scope)> {
+    symbols(SRC, Dialect::Jass)
+        .into_iter()
+        .filter(|o| o.name == name)
+        .map(|o| (o.line, o.kind, o.declaration, o.scope))
+        .collect()
+}
+
+#[test]
+fn records_project_wide_declarations_and_references() {
+    let p = Scope::Project;
+    assert_eq!(occurrences("MAX"), vec![(2, K::Constant, true, p), (8, K::Constant, false, p)]);
+    assert_eq!(occurrences("units"), vec![(3, K::Global, true, p)]);
+    assert_eq!(occurrences("mytype"), vec![(5, K::Type, true, p), (7, K::Type, false, p)]);
+    assert_eq!(occurrences("GetUnit"), vec![(6, K::Native, true, p), (9, K::Native, false, p)]);
+    assert_eq!(occurrences("Sum"), vec![(7, K::Function, true, p), (10, K::Function, false, p)]);
+    // Not declared here, still a project-wide reference.
+    assert_eq!(occurrences("ForGroup"), vec![(10, K::Function, false, p)]);
+}
+
+#[test]
+fn scopes_parameters_and_locals_to_their_signature() {
+    // `GetUnit` is signature 1, `Sum` signature 2.
+    assert_eq!(occurrences("id"), vec![(6, K::Parameter, true, Scope::Local(1))]);
+    let n = Scope::Local(2);
+    assert_eq!(occurrences("n"), vec![(7, K::Parameter, true, n), (9, K::Parameter, false, n)]);
+    assert_eq!(
+        occurrences("i"),
+        vec![(8, K::Local, true, n), (9, K::Local, false, n), (9, K::Local, false, n), (11, K::Local, false, n)]
+    );
+}
+
+#[test]
+fn primitive_types_are_not_symbols() {
+    assert!(occurrences("integer").is_empty());
+    assert!(occurrences("handle").is_empty());
+}
+
+#[test]
+fn symbols_carry_exact_columns() {
+    let syms = symbols(SRC, Dialect::Jass);
+    let sum = syms.iter().find(|o| o.name == "Sum" && o.declaration).unwrap();
+    assert_eq!((sum.line, sum.col, sum.end_col), (7, 10, 13));
+    assert!(sum.covers(7, 13) && !sum.covers(7, 14));
+}
+
+#[test]
+fn half_typed_code_is_still_indexed() {
+    let syms = symbols("function F takes integer x returns\n    set x = Foo(", Dialect::Jass);
+    let names: Vec<_> = syms.iter().map(|o| (o.name.as_str(), o.declaration)).collect();
+    assert_eq!(names, vec![("F", true), ("x", true), ("x", false), ("Foo", false)]);
+}
+
+#[test]
+fn embedded_zinc_is_indexed_with_its_own_scopes() {
+    let src = "\
+// @dialect vjass
+function A takes integer x returns nothing
+endfunction
+//! zinc
+library L { function F(integer x) { } }
+//! endzinc
+function B takes integer x returns nothing
+endfunction
+";
+    let xs: Vec<_> = symbols(src, Dialect::VJass)
+        .into_iter()
+        .filter(|o| o.name == "x")
+        .map(|o| (o.line, o.scope))
+        .collect();
+    // A is 1; the library 2 and F 3 inside the block; B goes on at 4.
+    assert_eq!(xs, vec![(2, Scope::Local(1)), (5, Scope::Local(3)), (7, Scope::Local(4))]);
+    let l = symbols(src, Dialect::VJass).into_iter().find(|o| o.name == "L").unwrap();
+    assert_eq!((l.kind, l.scope), (K::Library, Scope::Project));
 }

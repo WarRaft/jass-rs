@@ -134,3 +134,56 @@ endfunction
     let diags = lint_src(src);
     assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
 }
+
+#[test]
+fn top_level_globals_are_fine_and_checked_for_duplicates() {
+    let diags = lint_src("integer x = 1\nglobals\n    integer y\nendglobals\nreal x");
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].line, 5);
+    assert!(diags[0].message.contains("duplicate global variable 'x' (first declared at line 1)"));
+}
+
+#[test]
+fn asks_to_move_top_level_statements_into_a_function() {
+    let diags = lint_src("if true then\nendif\ncall F()\nlocal integer i\nloop\n    exitwhen true\nendloop");
+    let errors: Vec<(usize, &str)> = diags
+        .iter()
+        .filter(|d| d.level == Level::Error)
+        .map(|d| (d.line, d.message.as_str()))
+        .collect();
+    assert_eq!(
+        errors,
+        [
+            (1, "'if' statement outside a function: move it into a function"),
+            (3, "'call' statement outside a function: move it into a function"),
+            (4, "'local' outside a function: drop 'local' to declare a global, or move it into a function"),
+            (5, "'loop' statement outside a function: move it into a function"),
+        ]
+    );
+}
+
+#[test]
+fn a_variable_read_only_in_debug_code_is_used() {
+    let src = "function F takes nothing returns nothing\n    local integer x = 1\n    debug call Print(x)\nendfunction";
+    assert!(lint_src(src).iter().all(|d| !d.message.contains("unused")));
+}
+
+#[test]
+fn debug_code_doesnt_end_a_loop() {
+    // Outside debug mode the exitwhen isn't there.
+    let src = "function F takes nothing returns nothing\n    loop\n        debug if true then\n            exitwhen true\n        endif\n    endloop\nendfunction";
+    assert!(lint_src(src).iter().any(|d| d.message.contains("no 'exitwhen'")));
+}
+
+#[test]
+fn statements_inside_debug_are_linted() {
+    let src = "function F takes nothing returns nothing\n    debug if true then\n    endif\nendfunction";
+    assert!(lint_src(src).iter().any(|d| d.message.contains("empty 'then' branch")));
+}
+
+#[test]
+fn a_debug_statement_at_the_top_level_is_reported_like_its_statement() {
+    let program = Parser::parse_str("debug call F()").expect("parses");
+    let diags = lint(&program);
+    assert!(diags.iter().any(|d| d.message == "'call' statement outside a function: move it into a function"), "{diags:?}");
+}

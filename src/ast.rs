@@ -19,6 +19,14 @@ pub enum TopLevel {
     },
     Native(FunctionSig),
     Function(FunctionDecl),
+    /// A variable declared at the top level, outside `globals`. That's
+    /// legal here: when the map is built, it goes into the `globals`
+    /// block.
+    Global(GlobalDecl),
+    /// A statement at the top level (`if`, `set`, `call`, `loop`, ...).
+    /// It's parsed in full so the rest of the file still parses, and lint
+    /// reports it as an error: statements belong in a function.
+    Stmt(Stmt),
     /// A vJASS `//! zinc` ... `//! endzinc` block, parsed by `zinc-rs`.
     Zinc(ZincBlock),
 }
@@ -112,6 +120,12 @@ pub enum Stmt {
         value: Option<Expr>,
         line: usize,
     },
+    /// `debug set|call|if|loop ...`: run only when the game runs scripts in
+    /// debug mode, skipped otherwise. `stmt` is one of those four.
+    Debug {
+        stmt: Box<Stmt>,
+        line: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -182,5 +196,8 @@ pub enum BinOp {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnaryOp {
     Neg,
+    /// `+x`: valid JASS (the game's own AI scripts use it), the value
+    /// unchanged.
+    Plus,
     Not,
 }

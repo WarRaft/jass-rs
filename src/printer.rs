@@ -45,6 +45,8 @@ fn top_level_node(item: &TopLevel) -> Node {
             Node::with_children("Globals", decls.iter().map(global_decl_node).collect())
                 .tag("container", None)
         }
+        TopLevel::Global(d) => global_decl_node(d),
+        TopLevel::Stmt(s) => stmt_node(s),
         TopLevel::TypeDef {
             name,
             extends,
@@ -175,6 +177,10 @@ fn stmt_node(s: &Stmt) -> Node {
             value.iter().map(expr_node).collect(),
         )
         .tag("stmt", Some(Span::whole_line(*line))),
+        Stmt::Debug { stmt, line } => {
+            Node::with_children(format!("Debug (line {line})"), vec![stmt_node(stmt)])
+                .tag("stmt", Some(Span::whole_line(*line)))
+        }
     }
 }
 

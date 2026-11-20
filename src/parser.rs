@@ -88,14 +88,28 @@ impl Parser {
                 let sig = self.function_sig(false, line)?;
                 Ok(TopLevel::Native(sig))
             }
-            TokenKind::Keyword(Kw::Constant) => {
-                let line = self.peek().line;
-                self.advance();
-                self.expect(TokenKind::Keyword(Kw::Native))?;
-                let sig = self.function_sig(true, line)?;
-                Ok(TopLevel::Native(sig))
-            }
+            TokenKind::Keyword(Kw::Constant) => match self.ts.nth_kind(1) {
+                TokenKind::Keyword(Kw::Native) => {
+                    let line = self.peek().line;
+                    self.advance();
+                    self.advance();
+                    let sig = self.function_sig(true, line)?;
+                    Ok(TopLevel::Native(sig))
+                }
+                TokenKind::Keyword(Kw::Function) => self.function_decl(),
+                // `constant integer X = 1`: a top-level global
+                _ => Ok(TopLevel::Global(self.global_decl()?)),
+            },
             TokenKind::Keyword(Kw::Function) => self.function_decl(),
+            // `integer x = 1` at the top level: a global, moved into the
+            // `globals` block when the map is built.
+            TokenKind::Ident(_) => Ok(TopLevel::Global(self.global_decl()?)),
+            // Statements don't belong here, but they're read in full, so
+            // lint can ask for them to be moved into a function and the
+            // rest of the file still parses.
+            TokenKind::Keyword(
+                Kw::Local | Kw::Set | Kw::Call | Kw::If | Kw::Loop | Kw::ExitWhen | Kw::Return | Kw::Debug,
+            ) => Ok(TopLevel::Stmt(self.stmt()?)),
             // Control passes to the Zinc parser for the whole block, with
             // file-absolute lines, and comes back here for the next token.
             TokenKind::Embedded(block) if block.lang == "zinc" => {
@@ -205,10 +219,12 @@ impl Parser {
         Ok(Param { type_name, name })
     }
 
+    /// `[constant] function ... endfunction`.
     fn function_decl(&mut self) -> Result<TopLevel, ParseError> {
         let line = self.peek().line;
+        let is_constant = self.ts.eat(&TokenKind::Keyword(Kw::Constant));
         self.expect(TokenKind::Keyword(Kw::Function))?;
-        let sig = self.function_sig(false, line)?;
+        let sig = self.function_sig(is_constant, line)?;
         let body = self.stmt_block(&[TokenKind::Keyword(Kw::EndFunction)])?;
         self.expect(TokenKind::Keyword(Kw::EndFunction))?;
         Ok(TopLevel::Function(FunctionDecl { sig, body }))
@@ -234,7 +250,27 @@ impl Parser {
             TokenKind::Keyword(Kw::Loop) => self.loop_stmt(),
             TokenKind::Keyword(Kw::ExitWhen) => self.exitwhen_stmt(),
             TokenKind::Keyword(Kw::Return) => self.return_stmt(),
+            TokenKind::Keyword(Kw::Debug) => self.debug_stmt(),
             other => Err(self.error(format!("unexpected token in statement position: {other}"))),
+        }
+    }
+
+    /// `debug` before a `set`, `call`, `if` or `loop`: nothing else can be
+    /// skipped outside debug mode.
+    fn debug_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.peek().line;
+        self.expect(TokenKind::Keyword(Kw::Debug))?;
+        match self.peek_kind() {
+            TokenKind::Keyword(Kw::Set | Kw::Call | Kw::If | Kw::Loop) => {
+                let stmt = Box::new(self.stmt()?);
+                Ok(Stmt::Debug { stmt, line })
+            }
+            other => {
+                let other = other.clone();
+                Err(self.error(format!(
+                    "'debug' can only precede 'set', 'call', 'if' or 'loop', found {other}"
+                )))
+            }
         }
     }
 
@@ -373,6 +409,7 @@ impl Parser {
                 | TokenKind::Keyword(Kw::Null)
                 | TokenKind::Punct(Punct::LParen)
                 | TokenKind::Punct(Punct::Minus)
+                | TokenKind::Punct(Punct::Plus)
                 | TokenKind::Keyword(Kw::Not)
                 | TokenKind::Keyword(Kw::Function)
         )
@@ -471,6 +508,12 @@ impl Parser {
                 let e = self.unary_expr()?;
                 let span = Span::new(op_tok.line, op_tok.col, e.span.end_line, e.span.end_col);
                 Ok(Expr::new(ExprKind::Unary(UnaryOp::Neg, Box::new(e)), span))
+            }
+            TokenKind::Punct(Punct::Plus) => {
+                let op_tok = self.advance();
+                let e = self.unary_expr()?;
+                let span = Span::new(op_tok.line, op_tok.col, e.span.end_line, e.span.end_col);
+                Ok(Expr::new(ExprKind::Unary(UnaryOp::Plus, Box::new(e)), span))
             }
             TokenKind::Keyword(Kw::Not) => {
                 let op_tok = self.advance();

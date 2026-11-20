@@ -82,6 +82,38 @@ native GetHeroLevel takes unit whichHero returns integer
 constant native GetTriggerUnit takes nothing returns unit
 ```
 
+#### What this toolchain accepts at the top level
+
+The grammar above is what the game reads. Source files here are built
+into it, so the top level is more relaxed:
+
+- **Variables may be declared at the top level**, outside `globals` and
+  anywhere among the functions. When the map is built they go into the
+  `globals` block, so they're ordinary globals: same syntax, same rules,
+  and duplicates are checked across both forms.
+
+  ```jass
+  integer counter = 0                  // = a line in globals ... endglobals
+  constant real PI = 3.14159
+
+  function Tick takes nothing returns nothing
+      set counter = counter + 1
+  endfunction
+
+  unit array heroes                    // after a function: still a global
+  ```
+
+- **Statements at the top level are recognized, then rejected.** `if`,
+  `loop`, `set`, `call`, `exitwhen`, `return` and `local` are parsed in
+  full, so the rest of the file still parses and highlights. Lint then
+  reports an error asking to move the statement into a function. For
+  `local`, it suggests dropping `local` to get a global.
+
+  ```jass
+  call Init()       // error: 'call' statement outside a function: move it into a function
+  local integer i   // error: 'local' outside a function: drop 'local' to declare a global, ...
+  ```
+
 ### Functions
 
 ```jass
@@ -111,6 +143,12 @@ endfunction
 | return            | `return` / `return expr`                                                     |
 | debug             | `debug` before `set`/`call`/`if`/`loop`: only runs in debug mode             |
 
+`debug` before anything else is a parse error. Lint reads debug code
+like any other (an empty branch inside is still reported, a variable
+read there is still used), except that it can't end a loop or a
+function: outside debug mode it isn't there, so an `exitwhen` or
+`return` only inside `debug` doesn't count.
+
 ### Expressions
 
 | precedence (low → high) | operators                                       |
@@ -121,7 +159,7 @@ endfunction
 | 4                       | `<` `>` `<=` `>=`                               |
 | 5                       | `+` `-` (binary; `+` also concatenates strings) |
 | 6                       | `*` `/` (integer `/` truncates)                 |
-| 7                       | unary `-`, `not`                                |
+| 7                       | unary `-`, `+`, `not`                           |
 
 Operands are literals, variables, `arr[index]`, calls `Foo(args)`,
 parenthesized expressions and code references `function Foo`. A code
@@ -174,19 +212,38 @@ Supported: everything in the reference above **except**:
 
 | not yet                                   | notes                                                   |
 |-------------------------------------------|---------------------------------------------------------|
-| `constant function`                       | only `constant native` is accepted                      |
-| `debug` statements                        | the keyword isn't recognized                            |
-| `$1F` hex, octal `017`                    | `017` is read as decimal 17                             |
-| `'a'` (1-char rawcode), `1.` / `.5` reals |                                                         |
 | `\r \b \f` escapes                        | decoded as the bare letter                              |
 | locals-first rule                         | `local` is accepted anywhere in a body                  |
-| declarations-before-functions order       | top-level items may be interleaved                      |
+| declarations-before-functions order       | top-level items may be interleaved (on purpose for variables; see [the top level](#what-this-toolchain-accepts-at-the-top-level)) |
 | type checking / declare-before-use        | no symbol or type resolution yet                        |
 | vJASS                                     | `Dialect::VJass` = JASS + vJASS keywords + `/* */` + `//! zinc` blocks; `library`/`struct`/... grammar not yet |
 
-Lint rules: duplicate globals, functions and locals (errors); unused
+Every lint diagnostic names its rule. The rule ids, which rules are on
+by default (`infinite-loop` isn't) and how a project switches them
+(`[lint]` in `wc3.bni`) are in the [`wc3-rs` README](../wc3-rs/README.md#lint).
+
+Lint rules: duplicate globals (in `globals` and at the top level),
+functions and locals, and statements outside a function (errors); unused
 locals, `loop` without `exitwhen`, empty `then`/`else` branches, and a
 missing `return` in a function that declares a return type (warnings).
+
+**Symbols** (`symbols`, `semantic_tokens_and_symbols`): every name as a
+`parser_rs::Occurrence`, recorded by the semantic-token classifier in the
+same pass, so it works on half-typed code and always agrees with the
+highlighting.
+
+| names                                   | kind                           | scope                        |
+|-----------------------------------------|--------------------------------|------------------------------|
+| functions, natives                      | `Function`, `Native`           | project                      |
+| globals, constants                      | `Global`, `Constant`           | project                      |
+| types (`type`, not the primitives)      | `Type`                         | project                      |
+| parameters, locals                      | `Parameter`, `Local`           | their signature (`Local(n)`, `n` counts signatures in the file) |
+
+A reference's kind is what it's classified as where it's used: a call is
+a `Function` unless a `native` of that name is declared in the same file.
+An embedded Zinc block's names come from `zinc-rs`
+(`semantic_tokens_and_symbols_at`), its local scopes numbered on from the
+file's own so they never collide.
 
 ## Dialects and embedded Zinc
 
@@ -203,7 +260,13 @@ Only the header (leading blank and comment lines) is read. The name is
 case-insensitive. A Chinese JASS dialect is planned as another
 `Dialect` with its own options.
 
-- **API.** `jass_rs::parse_file(src)` honours the header (`Dialect::detect`).
+- **Projects.** In the editor, a file without a header gets its
+  project's default dialect instead: `[jass] dialect=vjass` in
+  `wc3.bni` (see the [`wc3-rs` README](../wc3-rs/README.md#projects)).
+  A header always wins over the project.
+- **API.** `jass_rs::parse_file(src)` honours the header (`Dialect::detect`);
+  `Dialect::declared(src)` is the header alone, `None` when it names no
+  known dialect.
   `jass_rs::parse(src)` is always plain JASS, and
   `jass_rs::parse_with(src, dialect)` forces a dialect.
 - **vJASS** is the same parser with a bigger keyword set

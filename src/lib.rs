@@ -15,7 +15,9 @@ pub use lint::{lint, Diagnostic, Level};
 pub use parser::{ParseError, Parser};
 pub use printer::{render_dot, render_tree};
 pub use query::{find_node_at, find_node_in, AstRef};
-pub use semantic::{encoded_semantic_tokens, semantic_tokens, semantic_tokens_with};
+pub use semantic::{
+    encoded_semantic_tokens, semantic_tokens, semantic_tokens_and_symbols, semantic_tokens_with, symbols,
+};
 
 /// Parses plain JASS source into an AST.
 pub fn parse(src: &str) -> Result<Program, ParseError> {
