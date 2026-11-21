@@ -269,6 +269,25 @@ An embedded Zinc block's names come from `zinc-rs`
 (`semantic_tokens_and_symbols_at`), its local scopes numbered on from the
 file's own so they never collide.
 
+### Planned
+
+Not built yet; the modules are shaped for them (see the
+[`wc3-mcp` README](../wc3-mcp/README.md#planned-jass)):
+
+- **Name resolution**: an unknown function, variable or type is an error;
+  a call with the wrong number of arguments too. It needs the project's
+  names (the server's symbol index, the game's `common.j` and
+  `Blizzard.j`), so the parser keeps every declaration and reference with
+  its span and order.
+- **Order, as the game reads it** (group `pure`): a call to a function
+  declared below it, and a `local` after a statement. Off for sources,
+  where the build sorts functions and locals go anywhere; on for a map's
+  `war3map.j`.
+- **Types**, after names: arguments, `set`, `return`, conditions, the
+  `handle` hierarchy from `common.j`.
+- **Comments above declarations** kept with them, so natives can be
+  listed with what a `common.j` says about them.
+
 ## Dialects and embedded Zinc
 
 Each file declares its dialect in its header, so a project can mix plain
