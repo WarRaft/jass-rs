@@ -15,6 +15,7 @@ pub fn lint(program: &Program) -> Vec<Diagnostic> {
         match item {
             TopLevel::Function(f) => {
                 check_signature(&f.sig, "function", &mut diags);
+                check_keywords(&f.body, &mut diags);
                 check_function(f, &mut diags);
             }
             TopLevel::Native(sig) => check_signature(sig, "native", &mut diags),
@@ -86,6 +87,19 @@ fn stmt_line(s: &Stmt) -> usize {
     }
 }
 
+/// The functions the build merges when there are several, as the game
+/// knows them: `main` and `config`, each taking and returning nothing.
+pub const MERGED_FUNCTIONS: [&str; 2] = ["main", "config"];
+
+/// Is `sig` a function the build merges with the others of its name
+/// ([`MERGED_FUNCTIONS`])?
+pub fn is_merged(sig: &FunctionSig) -> bool {
+    MERGED_FUNCTIONS.contains(&sig.name.as_str()) && sig.params.is_empty() && sig.returns.is_none()
+}
+
+/// `duplicate-declaration`, and `merged-function`: `main` and `config`
+/// may be declared any number of times, and the build merges them into
+/// one, each one's statements in their order; the game reads one.
 fn check_duplicate_top_level_names(program: &Program, diags: &mut Vec<Diagnostic>) {
     let mut seen: HashMap<String, usize> = HashMap::new();
     for item in &program.items {
@@ -94,7 +108,19 @@ fn check_duplicate_top_level_names(program: &Program, diags: &mut Vec<Diagnostic
             TopLevel::Native(sig) => (&sig.name, sig.line),
             _ => continue,
         };
-        if let Some(&first) = seen.get(name) {
+        let first = seen.get(name).copied();
+        if let (Some(first), TopLevel::Function(f)) = (first, item)
+            && is_merged(&f.sig)
+            && program.items.iter().any(|i| matches!(i, TopLevel::Function(g) if g.sig.line == first && is_merged(&g.sig)))
+        {
+            diags.push(Diagnostic::error(
+                rule::MERGED_FUNCTION,
+                format!("another '{name}' (the first at line {first}): the build merges them into one, the game reads one"),
+                line,
+            ));
+            continue;
+        }
+        if let Some(first) = first {
             diags.push(Diagnostic::error(rule::DUPLICATE_DECLARATION, 
                 format!("duplicate function '{name}' (first declared at line {first})"),
                 line,
@@ -140,6 +166,36 @@ fn check_declaration_order(program: &Program, diags: &mut Vec<Diagnostic>) {
                 format!("{what} comes after a function (line {f}): the game reads declarations only before the first function"),
                 line,
             ));
+        }
+    }
+}
+
+/// `implicit-keyword`: an assignment without `set`, a call without
+/// `call`. This toolchain reads them; the game requires the keyword.
+fn check_keywords(body: &[Stmt], diags: &mut Vec<Diagnostic>) {
+    for s in body {
+        match s {
+            Stmt::Set { keyword: false, name, line, .. } => diags.push(Diagnostic::error(
+                rule::IMPLICIT_KEYWORD,
+                format!("the assignment to '{name}' leaves out 'set', which the game requires"),
+                *line,
+            )),
+            Stmt::Call { keyword: false, name, line, .. } => diags.push(Diagnostic::error(
+                rule::IMPLICIT_KEYWORD,
+                format!("the call of '{name}' leaves out 'call', which the game requires"),
+                *line,
+            )),
+            Stmt::If { branches, else_branch, .. } => {
+                for (_, b) in branches {
+                    check_keywords(b, diags);
+                }
+                if let Some(b) = else_branch {
+                    check_keywords(b, diags);
+                }
+            }
+            Stmt::Loop { body, .. } => check_keywords(body, diags),
+            Stmt::Debug { stmt, .. } => check_keywords(std::slice::from_ref(stmt), diags),
+            _ => {}
         }
     }
 }

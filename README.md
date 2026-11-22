@@ -105,6 +105,37 @@ by default: a project that must stay pure JASS turns it on with
   endfunction
   ```
 
+- **`set` and `call` may be left out**: `x = 1`, `a[i] = x` and
+  `Foo(x)` as statements are an assignment and a call. A statement that
+  starts with a name is one of these, by what follows it (`=` or `[`:
+  an assignment; `(`: a call), and a name alone is an error. So a value
+  of `return` is on its line: `return` with a name on the next line
+  returns nothing, and the name starts the next statement. The game
+  requires the keyword (rule `implicit-keyword`, group `pure`).
+
+  ```jass
+  function Tick
+      counter = counter + 1            // = set counter = counter + 1
+      DisplayTextToPlayer(p, 0, 0, "") // = call DisplayTextToPlayer(...)
+  endfunction
+  ```
+
+- **`main` and `config` may be declared any number of times**, in any
+  of the project's files, each taking and returning nothing: the build
+  merges them into one, each one's statements in their order. So a
+  piece of code sets itself up where it is, without one `main` that
+  calls everything. The game reads one of each (rule `merged-function`,
+  group `pure`); another of them that takes or returns something is a
+  duplicate, as any other function's.
+
+  ```jass
+  trigger t = CreateTrigger()
+
+  function main
+      TriggerRegisterTimerEvent(t, 1.0, true)
+  endfunction
+  ```
+
 - **Variables may be declared at the top level**, outside `globals` and
   anywhere among the functions. When the map is built they go into the
   `globals` block, so they're ordinary globals: same syntax, same rules,
@@ -161,7 +192,7 @@ endfunction
 | statement         | syntax                                                                       |
 |-------------------|------------------------------------------------------------------------------|
 | assignment        | `set x = expr`, `set arr[i] = expr`                                          |
-| call              | `call Foo(args)`; a call is never a statement without `call`               |
+| call              | `call Foo(args)`; the game reads a call as a statement only after `call`    |
 | conditional       | `if cond then … [elseif cond then …]* [else …] endif`                        |
 | loop              | `loop … endloop`, the only loop construct                                    |
 | loop exit         | `exitwhen cond` (anywhere inside a `loop`, any number of times)              |

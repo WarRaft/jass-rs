@@ -324,3 +324,38 @@ fn takes_and_returns_may_be_left_out() {
     let prog = Parser::parse_str("function A\nendfunction\nfunction B\nendfunction").unwrap();
     assert_eq!(prog.items.len(), 2);
 }
+
+#[test]
+fn set_and_call_may_be_left_out() {
+    let body = |src: &str| match Parser::parse_str(src).unwrap().items.remove(0) {
+        TopLevel::Function(f) => f.body,
+        other => panic!("expected a function, got {other:?}"),
+    };
+    let b = body("function F\n    x = 1\n    a[i + 1] = x\n    Foo(x, 2)\n    set y = 2\n    call Bar()\nendfunction");
+    let kinds: Vec<(&str, &str, bool)> = b
+        .iter()
+        .map(|s| match s {
+            Stmt::Set { name, keyword, .. } => ("set", name.as_str(), *keyword),
+            Stmt::Call { name, keyword, .. } => ("call", name.as_str(), *keyword),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(kinds, [("set", "x", false), ("set", "a", false), ("call", "Foo", false), ("set", "y", true), ("call", "Bar", true)]);
+    assert!(matches!(&b[1], Stmt::Set { index: Some(_), .. }));
+
+    // `return` takes a value on its line only: a name on the next is a statement.
+    let b = body("function F\n    if a then\n        return\n    endif\n    Foo()\nendfunction");
+    assert!(matches!(&b[1], Stmt::Call { keyword: false, .. }), "{b:?}");
+}
+
+#[test]
+fn a_name_alone_starts_no_statement() {
+    let err = Parser::parse_str("function F\n    x\nendfunction").unwrap_err();
+    assert!(err.message.contains("'x' starts no statement"), "{}", err.message);
+    // `debug` before one without its keyword.
+    let prog = Parser::parse_str("function F\n    debug Foo()\nendfunction").unwrap();
+    match &prog.items[0] {
+        TopLevel::Function(f) => assert!(matches!(&f.body[0], Stmt::Debug { stmt, .. } if matches!(**stmt, Stmt::Call { keyword: false, .. }))),
+        other => panic!("{other:?}"),
+    }
+}

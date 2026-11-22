@@ -117,6 +117,7 @@ fn stmt_node(s: &Stmt) -> Node {
             index,
             value,
             line,
+            ..
         } => {
             let mut children = Vec::new();
             if let Some(idx) = index {
@@ -132,7 +133,7 @@ fn stmt_node(s: &Stmt) -> Node {
             Node::with_children(format!("Set {name} (line {line})"), children)
                 .tag("stmt", Some(Span::whole_line(*line)))
         }
-        Stmt::Call { name, args, line } => Node::with_children(
+        Stmt::Call { name, args, line, .. } => Node::with_children(
             format!("Call {name} (line {line})"),
             args.iter().map(expr_node).collect(),
         )

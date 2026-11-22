@@ -280,7 +280,12 @@ impl<'a> Classifier<'a> {
                 }
                 // references
                 _ => {
-                    let modified = is_kw(prev, Kw::Set);
+                    // After `set`, or first on its line in a function with
+                    // `=` or `[` after it: an assignment, `set` left out.
+                    let bare = scope.is_some()
+                        && prev.is_none_or(|p| p.line != t.line)
+                        && matches!(next.map(|n| &n.kind), Some(TokenKind::Punct(Punct::Assign | Punct::LBracket)));
+                    let modified = is_kw(prev, Kw::Set) || bare;
                     let local = scope.as_ref();
                     let (ty, mods) = if let Some(s) = local.filter(|s| s.params.contains(name)) {
                         syms.push(occurrence(t, name, K::Parameter, false, Scope::Local(s.id)));

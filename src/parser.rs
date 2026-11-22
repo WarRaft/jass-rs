@@ -259,7 +259,30 @@ impl Parser {
             TokenKind::Keyword(Kw::ExitWhen) => self.exitwhen_stmt(),
             TokenKind::Keyword(Kw::Return) => self.return_stmt(),
             TokenKind::Keyword(Kw::Debug) => self.debug_stmt(),
+            // `x = 1`, `x[i] = 1`, `Foo()`: `set` or `call` left out.
+            TokenKind::Ident(_) => self.bare_stmt(),
             other => Err(self.error(format!("unexpected token in statement position: {other}"))),
+        }
+    }
+
+    /// An assignment or a call without its `set` or `call`, which this
+    /// toolchain reads and the game doesn't (`implicit-keyword`): a name,
+    /// then `(` for a call, `=` or `[` for an assignment.
+    fn bare_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.peek().line;
+        match self.ts.nth_kind(1) {
+            TokenKind::Punct(Punct::LParen) => {
+                let name = self.expect_identifier()?;
+                self.expect(TokenKind::Punct(Punct::LParen))?;
+                let args = self.expr_list(&TokenKind::Punct(Punct::RParen))?;
+                self.expect(TokenKind::Punct(Punct::RParen))?;
+                Ok(Stmt::Call { name, args, line, keyword: false })
+            }
+            TokenKind::Punct(Punct::Assign | Punct::LBracket) => self.assignment(line, false),
+            _ => {
+                let name = self.expect_identifier()?;
+                Err(self.error(format!("'{name}' starts no statement: an assignment ('{name} = ...') or a call ('{name}(...)')")))
+            }
         }
     }
 
@@ -269,7 +292,7 @@ impl Parser {
         let line = self.peek().line;
         self.expect(TokenKind::Keyword(Kw::Debug))?;
         match self.peek_kind() {
-            TokenKind::Keyword(Kw::Set | Kw::Call | Kw::If | Kw::Loop) => {
+            TokenKind::Keyword(Kw::Set | Kw::Call | Kw::If | Kw::Loop) | TokenKind::Ident(_) => {
                 let stmt = Box::new(self.stmt()?);
                 Ok(Stmt::Debug { stmt, line })
             }
@@ -311,6 +334,11 @@ impl Parser {
     fn set_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
         self.expect(TokenKind::Keyword(Kw::Set))?;
+        self.assignment(line, true)
+    }
+
+    /// `name = value` or `name[index] = value`, after `set` if `keyword`.
+    fn assignment(&mut self, line: usize, keyword: bool) -> Result<Stmt, ParseError> {
         let name = self.expect_identifier()?;
         let index = if self.check(&TokenKind::Punct(Punct::LBracket)) {
             self.advance();
@@ -327,6 +355,7 @@ impl Parser {
             index,
             value,
             line,
+            keyword,
         })
     }
 
@@ -337,7 +366,7 @@ impl Parser {
         self.expect(TokenKind::Punct(Punct::LParen))?;
         let args = self.expr_list(&TokenKind::Punct(Punct::RParen))?;
         self.expect(TokenKind::Punct(Punct::RParen))?;
-        Ok(Stmt::Call { name, args, line })
+        Ok(Stmt::Call { name, args, line, keyword: true })
     }
 
     fn if_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -400,7 +429,9 @@ impl Parser {
     fn return_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
         self.expect(TokenKind::Keyword(Kw::Return))?;
-        let value = if self.starts_expr() {
+        // On its line: a name on the next is a statement of its own
+        // (`set` and `call` may be left out).
+        let value = if self.starts_expr() && self.peek().line == line {
             Some(self.expr()?)
         } else {
             None

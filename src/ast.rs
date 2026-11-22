@@ -103,11 +103,17 @@ pub enum Stmt {
         index: Option<Expr>,
         value: Expr,
         line: usize,
+        /// Whether `set` is written. Left out (`x = 1`), this toolchain
+        /// reads an assignment, and the game doesn't (`implicit-keyword`).
+        keyword: bool,
     },
     Call {
         name: String,
         args: Vec<Expr>,
         line: usize,
+        /// Whether `call` is written. Left out (`Foo()`), this toolchain
+        /// reads a call, and the game doesn't (`implicit-keyword`).
+        keyword: bool,
     },
     If {
         branches: Vec<(Expr, Vec<Stmt>)>,

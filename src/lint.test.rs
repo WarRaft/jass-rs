@@ -298,3 +298,57 @@ fn an_empty_else_is_marked_on_else_and_its_fix_deletes_it() {
     assert_eq!(fix.edits[0].span, Span::new(4, 1, 6, 1));
     assert_eq!(fix.edits[0].text, "");
 }
+
+#[test]
+fn implicit_keyword_names_what_is_left_out() {
+    let src = "\
+function F
+    x = 1
+    if x == 1 then
+        Foo()
+    endif
+    set y = 2
+    call Bar()
+    loop
+        debug a[1] = 2
+    endloop
+endfunction
+";
+    let found: Vec<(usize, String)> = lint_src(src)
+        .into_iter()
+        .filter(|d| d.rule == rule::IMPLICIT_KEYWORD)
+        .map(|d| (d.line, d.message))
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (2, "the assignment to 'x' leaves out 'set', which the game requires".to_string()),
+            (4, "the call of 'Foo' leaves out 'call', which the game requires".to_string()),
+            (9, "the assignment to 'a' leaves out 'set', which the game requires".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn main_and_config_may_be_declared_again() {
+    let src = "\
+function main
+endfunction
+function config
+endfunction
+function main
+    Foo()
+endfunction
+function main takes integer x
+endfunction
+function Other
+endfunction
+function Other
+endfunction
+";
+    let diags = lint_src(src);
+    let of = |r: &str| diags.iter().filter(|d| d.rule == r).map(|d| d.line).collect::<Vec<_>>();
+    // Another main merges with the first; one that takes something is a duplicate.
+    assert_eq!(of(rule::MERGED_FUNCTION), [5]);
+    assert_eq!(of(rule::DUPLICATE_DECLARATION), [8, 12]);
+}
