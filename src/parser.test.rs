@@ -359,3 +359,24 @@ fn a_name_alone_starts_no_statement() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn local_may_be_left_out() {
+    let prog = Parser::parse_str("integer g = 1\nfunction F\n    integer i = 0\n    unit array us\n    local real r\n    i = g\nendfunction").unwrap();
+    // At the top level a global, in a function a local.
+    assert!(matches!(&prog.items[0], TopLevel::Global(d) if d.name == "g"));
+    let TopLevel::Function(f) = &prog.items[1] else { panic!("{:?}", prog.items[1]) };
+    let locals: Vec<(&str, &str, bool, bool)> = f
+        .body
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Local { type_name, name, is_array, keyword, .. } => Some((type_name.as_str(), name.as_str(), *is_array, *keyword)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(locals, [("integer", "i", false, false), ("unit", "us", true, false), ("real", "r", false, true)]);
+    assert!(matches!(&f.body[3], Stmt::Set { keyword: false, .. }));
+    // Not after `debug`: it skips set, call, if and loop only.
+    let err = Parser::parse_str("function F\n    debug integer i\nendfunction").unwrap_err();
+    assert!(err.message.contains("'debug' can only precede"), "{}", err.message);
+}

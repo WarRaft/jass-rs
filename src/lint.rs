@@ -171,7 +171,8 @@ fn check_declaration_order(program: &Program, diags: &mut Vec<Diagnostic>) {
 }
 
 /// `implicit-keyword`: an assignment without `set`, a call without
-/// `call`. This toolchain reads them; the game requires the keyword.
+/// `call`, a local without `local`. This toolchain reads them; the game
+/// requires the keyword.
 fn check_keywords(body: &[Stmt], diags: &mut Vec<Diagnostic>) {
     for s in body {
         match s {
@@ -183,6 +184,11 @@ fn check_keywords(body: &[Stmt], diags: &mut Vec<Diagnostic>) {
             Stmt::Call { keyword: false, name, line, .. } => diags.push(Diagnostic::error(
                 rule::IMPLICIT_KEYWORD,
                 format!("the call of '{name}' leaves out 'call', which the game requires"),
+                *line,
+            )),
+            Stmt::Local { keyword: false, name, line, .. } => diags.push(Diagnostic::error(
+                rule::IMPLICIT_KEYWORD,
+                format!("the local '{name}' leaves out 'local', which the game requires"),
                 *line,
             )),
             Stmt::If { branches, else_branch, .. } => {

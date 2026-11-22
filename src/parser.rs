@@ -265,9 +265,11 @@ impl Parser {
         }
     }
 
-    /// An assignment or a call without its `set` or `call`, which this
-    /// toolchain reads and the game doesn't (`implicit-keyword`): a name,
-    /// then `(` for a call, `=` or `[` for an assignment.
+    /// An assignment, a call or a local without its `set`, `call` or
+    /// `local`, which this toolchain reads and the game doesn't
+    /// (`implicit-keyword`): a name, then `(` for a call, `=` or `[` for an
+    /// assignment, a name or `array` for a local (its type, then it; a
+    /// function can't declare a global).
     fn bare_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
         match self.ts.nth_kind(1) {
@@ -279,9 +281,13 @@ impl Parser {
                 Ok(Stmt::Call { name, args, line, keyword: false })
             }
             TokenKind::Punct(Punct::Assign | Punct::LBracket) => self.assignment(line, false),
+            // `integer i = 0`, `unit array u`: in a function, a local.
+            TokenKind::Ident(_) | TokenKind::Keyword(Kw::Array) => self.local_decl(line, false),
             _ => {
                 let name = self.expect_identifier()?;
-                Err(self.error(format!("'{name}' starts no statement: an assignment ('{name} = ...') or a call ('{name}(...)')")))
+                Err(self.error(format!(
+                    "'{name}' starts no statement: an assignment ('{name} = ...'), a call ('{name}(...)') or a local ('{name} x')"
+                )))
             }
         }
     }
@@ -292,6 +298,12 @@ impl Parser {
         let line = self.peek().line;
         self.expect(TokenKind::Keyword(Kw::Debug))?;
         match self.peek_kind() {
+            // A name: an assignment or a call, `set` or `call` left out.
+            TokenKind::Ident(_)
+                if !matches!(self.ts.nth_kind(1), TokenKind::Punct(Punct::Assign | Punct::LBracket | Punct::LParen)) =>
+            {
+                Err(self.error("'debug' can only precede 'set', 'call', 'if' or 'loop'"))
+            }
             TokenKind::Keyword(Kw::Set | Kw::Call | Kw::If | Kw::Loop) | TokenKind::Ident(_) => {
                 let stmt = Box::new(self.stmt()?);
                 Ok(Stmt::Debug { stmt, line })
@@ -308,6 +320,11 @@ impl Parser {
     fn local_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
         self.expect(TokenKind::Keyword(Kw::Local))?;
+        self.local_decl(line, true)
+    }
+
+    /// `type name [= value]` or `type array name`, after `local` if `keyword`.
+    fn local_decl(&mut self, line: usize, keyword: bool) -> Result<Stmt, ParseError> {
         let type_name = self.expect_type_name()?;
         let is_array = if self.check(&TokenKind::Keyword(Kw::Array)) {
             self.advance();
@@ -328,6 +345,7 @@ impl Parser {
             name,
             initializer,
             line,
+            keyword,
         })
     }
 

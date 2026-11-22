@@ -352,3 +352,19 @@ endfunction
     assert_eq!(of(rule::MERGED_FUNCTION), [5]);
     assert_eq!(of(rule::DUPLICATE_DECLARATION), [8, 12]);
 }
+
+#[test]
+fn implicit_keyword_names_a_local_too() {
+    let diags = lint_src("function F\n    integer i = 0\n    local integer j = i\n    j = j + 1\nendfunction\n");
+    let found: Vec<(usize, String)> = diags.iter().filter(|d| d.rule == rule::IMPLICIT_KEYWORD).map(|d| (d.line, d.message.clone())).collect();
+    assert_eq!(
+        found,
+        vec![
+            (2, "the local 'i' leaves out 'local', which the game requires".to_string()),
+            (4, "the assignment to 'j' leaves out 'set', which the game requires".to_string()),
+        ]
+    );
+    // A local all the same: unused, it's reported as one.
+    let diags = lint_src("function F\n    integer k = 0\nendfunction\n");
+    assert!(diags.iter().any(|d| d.rule == rule::UNUSED_LOCAL), "{diags:?}");
+}

@@ -104,6 +104,7 @@ fn stmt_node(s: &Stmt) -> Node {
             name,
             initializer,
             line,
+            ..
         } => {
             let label = format!(
                 "Local {type_name}{} {name} (line {line})",

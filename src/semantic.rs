@@ -214,7 +214,12 @@ impl<'a> Classifier<'a> {
             };
 
             let decl = Modifiers::NONE.with(M::Declaration);
-            let token = match prev.map(|p| &p.kind) {
+            // A declaration (`<type> name`, `function Name` ...) is on one
+            // line: a name ending one line and one starting the next aren't
+            // one (`local unit u` and then `KillUnit(u)`, `call` left out).
+            let prev_here = prev.filter(|p| p.line == t.line);
+            let next_here = next.filter(|n| n.line == t.line);
+            let token = match prev_here.map(|p| &p.kind) {
                 // `function Name` / `native Name` declarations
                 Some(TokenKind::Keyword(kw @ (Kw::Function | Kw::Native)))
                     if decl_kw == Some(i - 1) =>
@@ -243,7 +248,7 @@ impl<'a> Classifier<'a> {
                 }
                 // `<type> name` / `<type> array name`: the type part
                 _ if matches!(
-                    next.map(|n| &n.kind),
+                    next_here.map(|n| &n.kind),
                     Some(TokenKind::Ident(_) | TokenKind::Keyword(Kw::Array))
                 ) =>
                 {

@@ -105,17 +105,21 @@ by default: a project that must stay pure JASS turns it on with
   endfunction
   ```
 
-- **`set` and `call` may be left out**: `x = 1`, `a[i] = x` and
-  `Foo(x)` as statements are an assignment and a call. A statement that
-  starts with a name is one of these, by what follows it (`=` or `[`:
-  an assignment; `(`: a call), and a name alone is an error. So a value
-  of `return` is on its line: `return` with a name on the next line
-  returns nothing, and the name starts the next statement. The game
-  requires the keyword (rule `implicit-keyword`, group `pure`).
+- **`set`, `call` and `local` may be left out**: `x = 1`, `a[i] = x`,
+  `Foo(x)` and `integer i = 0` as statements are an assignment, a call
+  and a local. A function can't declare a global, so a declaration in
+  one is a local, and at the top level a global. A statement that starts
+  with a name is one of these, by what follows it (`=` or `[`: an
+  assignment; `(`: a call; a name or `array`: a local, the first name
+  its type), and a name alone is an error. So a value of `return` is on
+  its line: `return` with a name on the next line returns nothing, and
+  the name starts the next statement. The game requires the keyword
+  (rule `implicit-keyword`, group `pure`).
 
   ```jass
   function Tick
-      counter = counter + 1            // = set counter = counter + 1
+      integer n = counter              // = local integer n = counter
+      counter = n + 1                  // = set counter = n + 1
       DisplayTextToPlayer(p, 0, 0, "") // = call DisplayTextToPlayer(...)
   endfunction
   ```

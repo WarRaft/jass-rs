@@ -215,3 +215,38 @@ fn functions_without_takes_or_returns_are_indexed() {
         ]
     );
 }
+
+#[test]
+fn set_and_call_left_out_after_locals() {
+    // `call` left out: a name after a local's declaration starts its own
+    // line, and isn't one more of that declaration.
+    let src = "native KillUnit takes unit u returns nothing\nfunction F\n    local unit u\n    KillUnit(u)\n    KillUnit(u)\n    u = null\nendfunction\n";
+    let toks = semantic_tokens(src);
+    let at = |line: usize, col: usize| toks.iter().find(|t| t.line == line && t.start_col == col).map(|t| (t.ty, t.mods)).unwrap();
+    assert_eq!(at(3, 16), (T::Variable, m(&[M::Declaration])));
+    assert_eq!(at(4, 5), (T::Function, m(&[M::DefaultLibrary])));
+    assert_eq!(at(5, 5), (T::Function, m(&[M::DefaultLibrary])));
+    // `set` left out: a write.
+    assert_eq!(at(6, 5), (T::Variable, m(&[M::Modification])));
+    // And the local is the only one declared: KillUnit isn't a local.
+    let mut syms = Vec::new();
+    let mut out = Vec::new();
+    let lexed = crate::lexer::Lexer::tokenize(src).unwrap();
+    Classifier::new(&lexed).run(&mut out, &mut syms);
+    assert!(!syms.iter().any(|o| o.name == "KillUnit" && o.kind == K::Local), "{syms:?}");
+}
+
+#[test]
+fn a_local_without_local() {
+    let src = "integer g = 0\nfunction F\n    integer i = g\n    i = i + 1\nendfunction\n";
+    let toks = semantic_tokens(src);
+    let at = |line: usize, col: usize| toks.iter().find(|t| t.line == line && t.start_col == col).map(|t| (t.ty, t.mods)).unwrap();
+    assert_eq!(at(3, 5), (T::Type, m(&[M::DefaultLibrary])));
+    assert_eq!(at(3, 13), (T::Variable, m(&[M::Declaration])));
+    let mut syms = Vec::new();
+    let mut out = Vec::new();
+    let lexed = crate::lexer::Lexer::tokenize(src).unwrap();
+    Classifier::new(&lexed).run(&mut out, &mut syms);
+    assert!(syms.iter().any(|o| o.name == "i" && o.kind == K::Local && o.declaration), "{syms:?}");
+    assert!(syms.iter().any(|o| o.name == "g" && o.kind == K::Global && o.declaration), "{syms:?}");
+}

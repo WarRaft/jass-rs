@@ -97,6 +97,10 @@ pub enum Stmt {
         name: String,
         initializer: Option<Expr>,
         line: usize,
+        /// Whether `local` is written. Left out (`integer i = 0` in a
+        /// function), this toolchain reads a local, and the game doesn't
+        /// (`implicit-keyword`): globals can't be declared in a function.
+        keyword: bool,
     },
     Set {
         name: String,
