@@ -2,6 +2,7 @@ pub mod ast;
 pub mod html;
 pub mod lexer;
 pub mod lint;
+pub mod names;
 pub mod parser;
 pub mod printer;
 pub mod query;

@@ -281,6 +281,19 @@ Every lint diagnostic names its rule. The rule ids, which rules are on
 by default (`infinite-loop` isn't) and how a project switches them
 (`[lint]` in `wc3.bni`) are in the [`wc3-rs` README](../wc3-rs/README.md#lint).
 
+**Names** (`names`): `Declarations::of` is what a program declares
+(functions and natives with their signatures, globals, types);
+`names::check` resolves every name a program uses against its own and an
+environment the caller gives (the game's `common.j` and `Blizzard.j`, the
+project's other files: this crate reads no files), and reports
+`unknown-name` (a function, variable or type declared nowhere) and
+`argument-count` (a call of the wrong arity, a code value of a function
+that takes arguments). A local is seen in all of its function (locals go
+anywhere). A name the environment knows without a signature (another
+language's) is known, its calls not counted. `Blizzard.j`, `common.ai`
+and the `war3map.j` of three maps check clean (an ignored test,
+`JASS_GAME` and `JASS_FILES`).
+
 Lint rules: duplicate globals (in `globals` and at the top level),
 functions and locals, and statements outside a function (errors); unused
 locals, `loop` without `exitwhen`, empty `then`/`else` branches, and a
