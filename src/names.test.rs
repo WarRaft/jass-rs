@@ -218,3 +218,27 @@ endfunction
         ]
     );
 }
+
+#[test]
+fn comments_above_declarations() {
+    let src = "\
+//============================================================================
+// MathAPI
+native Deg2Rad takes real degrees returns real
+
+// Expect values between -1 and 1...returns 0 for invalid input
+native Asin takes real y returns real
+native Acos takes real x returns real // the arc cosine
+//
+// y == 0.0 => 1
+//
+native Pow takes real x, real power returns real
+native S takes nothing returns string // \"//\" isn't one
+";
+    assert_eq!(comment_of(src, 3), "MathAPI");
+    assert_eq!(comment_of(src, 6), "Expect values between -1 and 1...returns 0 for invalid input");
+    assert_eq!(comment_of(src, 7), "the arc cosine");
+    assert_eq!(comment_of(src, 11), "y == 0.0 => 1");
+    assert_eq!(comment_of(src, 12), "\"//\" isn't one");
+    assert_eq!(comment_of(src, 1), "");
+}

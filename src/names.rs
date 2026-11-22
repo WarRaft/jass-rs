@@ -117,6 +117,55 @@ impl Declarations {
     }
 }
 
+/// The comment written for the declaration at `line` (from 1) of `src`:
+/// the `//` lines right above it (no blank line between), and one after
+/// it on its line; without `//`, trimmed, a line each. A line of the
+/// comment that's only a rule (`//=====`, `//-----`) isn't one, and a
+/// rule above ends the comment (it's a section's).
+pub fn comment_of(src: &str, line: usize) -> String {
+    let lines: Vec<&str> = src.lines().collect();
+    let text = |l: &str| l.trim().strip_prefix("//").map(|c| c.trim().to_string());
+    let rule = |c: &str| !c.is_empty() && c.chars().all(|ch| matches!(ch, '=' | '-' | '*' | '/' | '#' | '~' | '_'));
+    let mut above = Vec::new();
+    for l in lines[..line.saturating_sub(1).min(lines.len())].iter().rev() {
+        match text(l) {
+            Some(c) if rule(&c) => break,
+            Some(c) => above.push(c),
+            None => break,
+        }
+    }
+    above.reverse();
+    // A trailing comment, outside a string.
+    if let Some(own) = lines.get(line.wrapping_sub(1)).filter(|l| !l.trim_start().starts_with("//")) {
+        let mut in_string = false;
+        let chars: Vec<char> = own.chars().collect();
+        let mut i = 0;
+        while i + 1 < chars.len() {
+            match chars[i] {
+                '"' => in_string = !in_string,
+                '\\' if in_string => i += 1,
+                '/' if !in_string && chars[i + 1] == '/' => {
+                    let c: String = chars[i + 2..].iter().collect();
+                    if !c.trim().is_empty() && !rule(c.trim()) {
+                        above.push(c.trim().to_string());
+                    }
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+    // Empty `//` lines at its ends say nothing.
+    while above.first().is_some_and(|c| c.is_empty()) {
+        above.remove(0);
+    }
+    while above.last().is_some_and(|c| c.is_empty()) {
+        above.pop();
+    }
+    above.join("\n")
+}
+
 /// Where names are looked up: the program's, then the environment's.
 struct Scope<'a> {
     own: &'a Declarations,

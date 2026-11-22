@@ -304,6 +304,10 @@ that takes arguments), and types:
   array (an index is an integer).
 - `constant-assignment`: a constant set.
 
+`names::comment_of` is the comment written for a declaration: the `//`
+lines right above it (a rule line like `//=====` ends it: that's a
+section's) and one after it on its line.
+
 A value whose type can't be known (an unknown name, another language's)
 isn't checked further, nor is what a wrong operation makes, so one
 mistake is reported once. A local is seen in all of its function (locals
