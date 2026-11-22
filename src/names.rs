@@ -11,6 +11,17 @@
 //! - `argument-count`: a call with more or fewer arguments than its
 //!   function takes, or `function Foo` (a code value) of one that takes
 //!   some.
+//! - `type-mismatch`: a value of the wrong type: an argument, a value set
+//!   or returned, a condition, an operator's side. A type goes where it or
+//!   a type it extends is wanted (`unit` where `widget`, `handle`), an
+//!   `integer` where a `real`, `null` where a handle, a `string` or `code`.
+//!   `==` compares numbers with numbers, handles with handles, anything
+//!   with its own type or `null`; `+` also joins strings.
+//! - `array-access`: an array without its index, an index of what isn't
+//!   one. `constant-assignment`: a constant set.
+//!
+//! A value whose type can't be known (an unknown name, another
+//! language's) isn't checked further, so one mistake is reported once.
 //!
 //! A name the environment knows without a signature ([`Declarations::name`]:
 //! a public Zinc function, say) is known, and its calls aren't counted.
@@ -121,21 +132,93 @@ impl Scope<'_> {
         self.all().find_map(|d| d.functions.get(name).map(Some).or_else(|| d.others.contains(name).then_some(None)))
     }
 
-    fn variable(&self, name: &str) -> bool {
-        self.all().any(|d| d.globals.contains_key(name) || d.others.contains(name))
+    /// A global: `Some(Some(_))` declared in JASS, `Some(None)` known
+    /// without its type (another language's), `None` unknown.
+    fn global(&self, name: &str) -> Option<Option<&Global>> {
+        self.all().find_map(|d| d.globals.get(name).map(Some).or_else(|| d.others.contains(name).then_some(None)))
     }
 
     fn type_known(&self, name: &str) -> bool {
         PRIMITIVES.contains(&name) || self.all().any(|d| d.types.contains_key(name) || d.others.contains(name))
     }
+
+    /// The type `name` extends, if it's one of the declared types.
+    fn parent(&self, name: &str) -> Option<&str> {
+        self.all().find_map(|d| d.types.get(name)).map(String::as_str)
+    }
+
+    /// Is `name` `handle` or a type extending it?
+    fn is_handle(&self, name: &str) -> bool {
+        self.extends(name, "handle")
+    }
+
+    /// Is `ty` `to`, or does it extend it (through its parents)?
+    fn extends(&self, ty: &str, to: &str) -> bool {
+        let mut t = ty;
+        // A loop of `extends` mustn't hang the check.
+        for _ in 0..64 {
+            if t == to {
+                return true;
+            }
+            match self.parent(t) {
+                Some(p) => t = p,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// Can a value of type `from` go where `to` is wanted? `null` goes into
+    /// a handle, a string or code; an integer into a real; a type into one
+    /// it extends.
+    fn assignable(&self, from: &Ty, to: &str) -> bool {
+        match from {
+            Ty::Null => to == "string" || to == "code" || self.is_handle(to),
+            Ty::Nothing => false,
+            Ty::Is(f) => f == to || (f == "integer" && to == "real") || self.extends(f, to),
+        }
+    }
 }
 
-/// Every name `program` uses that isn't declared in it or in `env`, and
-/// every call with the wrong number of arguments; sorted by line.
+/// The type of a value: a type's name, `null`, or nothing (a call of a
+/// function that returns nothing).
+#[derive(Debug, Clone, PartialEq)]
+enum Ty {
+    Is(String),
+    Null,
+    Nothing,
+}
+
+impl Ty {
+    fn of(name: &str) -> Ty {
+        Ty::Is(name.to_string())
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Ty::Is(n) => n,
+            Ty::Null => "null",
+            Ty::Nothing => "nothing",
+        }
+    }
+
+    fn is(&self, name: &str) -> bool {
+        matches!(self, Ty::Is(n) if n == name)
+    }
+
+    fn numeric(&self) -> bool {
+        self.is("integer") || self.is("real")
+    }
+}
+
+/// Every name `program` uses that isn't declared in it or in `env`, every
+/// call with the wrong number of arguments, and every value of the wrong
+/// type (`type-mismatch`, `array-access`, `constant-assignment`); sorted by
+/// line.
 pub fn check(program: &Program, env: &[&Declarations]) -> Vec<Diagnostic> {
     let own = Declarations::of(program);
     let scope = Scope { own: &own, env };
-    let mut c = Checker { scope, out: Vec::new(), locals: HashSet::new() };
+    let mut c = Checker { scope, out: Vec::new(), locals: HashMap::new(), returns: None };
     for item in &program.items {
         match item {
             TopLevel::Function(f) => c.function(f),
@@ -150,11 +233,22 @@ pub fn check(program: &Program, env: &[&Declarations]) -> Vec<Diagnostic> {
     c.out
 }
 
+/// A variable as a function sees it: its type, is it an array, is it a
+/// constant.
+struct Var {
+    ty: String,
+    array: bool,
+    constant: bool,
+}
+
 struct Checker<'a> {
     scope: Scope<'a>,
     out: Vec<Diagnostic>,
-    /// The parameters and locals of the function being checked.
-    locals: HashSet<String>,
+    /// The parameters and locals of the function being checked: type and
+    /// whether an array.
+    locals: HashMap<String, (String, bool)>,
+    /// What the function being checked returns (`None`: nothing).
+    returns: Option<Option<String>>,
 }
 
 /// The span of `name` at the start of `span` (a call's, an array
@@ -164,12 +258,33 @@ fn name_span(span: Span, name: &str) -> Span {
 }
 
 impl Checker<'_> {
-    fn unknown(&mut self, what: &str, name: &str, line: usize, span: Option<Span>) {
-        let d = Diagnostic::error(rule::UNKNOWN_NAME, format!("{what} '{name}' is declared nowhere"), line);
+    fn push(&mut self, d: Diagnostic, span: Option<Span>) {
         self.out.push(match span {
             Some(s) => d.at(s),
             None => d,
         });
+    }
+
+    fn unknown(&mut self, what: &str, name: &str, line: usize, span: Option<Span>) {
+        self.push(Diagnostic::error(rule::UNKNOWN_NAME, format!("{what} '{name}' is declared nowhere"), line), span);
+    }
+
+    /// `ty` (a value's) where `want` is wanted, `what` saying where.
+    fn expect(&mut self, ty: Option<Ty>, want: &str, what: impl FnOnce() -> String, line: usize, span: Option<Span>) {
+        let Some(ty) = ty else { return };
+        // A type that isn't known was reported as unknown already.
+        if !self.scope.type_known(want) || self.scope.assignable(&ty, want) {
+            return;
+        }
+        let message = match ty {
+            Ty::Nothing => format!("{} is a call of a function that returns nothing, where {want} is wanted", what()),
+            t => format!("{} is {}, where {want} is wanted", what(), article(t.name())),
+        };
+        self.push(Diagnostic::error(rule::TYPE_MISMATCH, message, line), span);
+    }
+
+    fn mismatch(&mut self, message: String, line: usize, span: Option<Span>) {
+        self.push(Diagnostic::error(rule::TYPE_MISMATCH, message, line), span);
     }
 
     fn type_name(&mut self, name: &str, line: usize) {
@@ -190,44 +305,66 @@ impl Checker<'_> {
     fn global(&mut self, g: &GlobalDecl) {
         self.type_name(&g.type_name, g.line);
         if let Some(e) = &g.initializer {
-            self.expr(e);
+            let ty = self.expr(e);
+            self.expect(ty, &g.type_name, || format!("the value of '{}'", g.name), g.line, Some(e.span));
         }
     }
 
     fn function(&mut self, f: &FunctionDecl) {
         self.signature(&f.sig);
-        self.locals = f.sig.params.iter().map(|p| p.name.clone()).collect();
+        self.locals = f.sig.params.iter().map(|p| (p.name.clone(), (p.type_name.clone(), false))).collect();
         collect_locals(&f.body, &mut self.locals);
+        self.returns = Some(f.sig.returns.clone());
         self.stmts(&f.body);
         self.locals.clear();
+        self.returns = None;
     }
 
-    fn variable(&mut self, name: &str, line: usize, span: Option<Span>) {
-        if !self.locals.contains(name) && !self.scope.variable(name) {
-            self.unknown("the variable", name, line, span);
+    /// The variable `name`: a parameter or local, else a global. `None`
+    /// when it's unknown (reported) or of another language.
+    fn var(&mut self, name: &str, line: usize, span: Option<Span>) -> Option<Var> {
+        if let Some((ty, array)) = self.locals.get(name) {
+            return Some(Var { ty: ty.clone(), array: *array, constant: false });
         }
-    }
-
-    fn call(&mut self, name: &str, args: &[Expr], line: usize, span: Option<Span>) {
-        for a in args {
-            self.expr(a);
-        }
-        match self.scope.function(name) {
-            None => self.unknown("the function", name, line, span),
-            Some(Some(sig)) if sig.params.len() != args.len() => {
-                let takes = match sig.params.len() {
-                    0 => "nothing".to_string(),
-                    1 => "1 argument".to_string(),
-                    n => format!("{n} arguments"),
-                };
-                let d = Diagnostic::error(rule::ARGUMENT_COUNT, format!("'{name}' takes {takes}, not {}", args.len()), line);
-                self.out.push(match span {
-                    Some(s) => d.at(s),
-                    None => d,
-                });
+        match self.scope.global(name) {
+            Some(Some(g)) => Some(Var { ty: g.type_name.clone(), array: g.is_array, constant: g.constant }),
+            Some(None) => None,
+            None => {
+                self.unknown("the variable", name, line, span);
+                None
             }
-            Some(_) => {}
         }
+    }
+
+    /// An array's index, an integer.
+    fn index(&mut self, index: &Expr) {
+        let ty = self.expr(index);
+        self.expect(ty, "integer", || "an array's index".to_string(), index.span.start_line, Some(index.span));
+    }
+
+    fn call(&mut self, name: &str, args: &[Expr], line: usize, span: Option<Span>) -> Option<Ty> {
+        let types: Vec<Option<Ty>> = args.iter().map(|a| self.expr(a)).collect();
+        let sig = match self.scope.function(name) {
+            None => {
+                self.unknown("the function", name, line, span);
+                return None;
+            }
+            Some(None) => return None,
+            Some(Some(sig)) => sig.clone(),
+        };
+        if sig.params.len() != args.len() {
+            let takes = match sig.params.len() {
+                0 => "nothing".to_string(),
+                1 => "1 argument".to_string(),
+                n => format!("{n} arguments"),
+            };
+            self.push(Diagnostic::error(rule::ARGUMENT_COUNT, format!("'{name}' takes {takes}, not {}", args.len()), line), span);
+        } else {
+            for (i, ((a, ty), want)) in args.iter().zip(types).zip(&sig.params).enumerate() {
+                self.expect(ty, want, || format!("argument {} of '{name}'", i + 1), a.span.start_line, Some(a.span));
+            }
+        }
+        Some(sig.returns.as_deref().map_or(Ty::Nothing, Ty::of))
     }
 
     fn stmts(&mut self, body: &[Stmt]) {
@@ -236,25 +373,44 @@ impl Checker<'_> {
         }
     }
 
+    /// A condition (`if`, `elseif`, `exitwhen`): a boolean.
+    fn condition(&mut self, cond: &Expr, what: &str) {
+        let ty = self.expr(cond);
+        self.expect(ty, "boolean", || format!("the condition of '{what}'"), cond.span.start_line, Some(cond.span));
+    }
+
     fn stmt(&mut self, s: &Stmt) {
         match s {
-            Stmt::Local { type_name, initializer, line, .. } => {
+            Stmt::Local { type_name, name, initializer, line, .. } => {
                 self.type_name(type_name, *line);
                 if let Some(e) = initializer {
-                    self.expr(e);
+                    let ty = self.expr(e);
+                    self.expect(ty, type_name, || format!("the value of '{name}'"), *line, Some(e.span));
                 }
             }
             Stmt::Set { name, index, value, line, .. } => {
-                self.variable(name, *line, None);
+                let var = self.var(name, *line, None);
                 if let Some(i) = index {
-                    self.expr(i);
+                    self.index(i);
                 }
-                self.expr(value);
+                let ty = self.expr(value);
+                let Some(var) = var else { return };
+                if var.constant {
+                    let d = Diagnostic::error(rule::CONSTANT_ASSIGNMENT, format!("'{name}' is a constant: it can't be set"), *line);
+                    self.push(d, None);
+                }
+                match (var.array, index.is_some()) {
+                    (true, false) => self.array(format!("'{name}' is an array: it's set by an index ({name}[i] = ...)"), *line, None),
+                    (false, true) => self.array(format!("'{name}' isn't an array: it has no index"), *line, None),
+                    _ => self.expect(ty, &var.ty, || format!("the value set to '{name}'"), *line, Some(value.span)),
+                }
             }
-            Stmt::Call { name, args, line, .. } => self.call(name, args, *line, None),
+            Stmt::Call { name, args, line, .. } => {
+                self.call(name, args, *line, None);
+            }
             Stmt::If { branches, else_branch, .. } => {
-                for (cond, body) in branches {
-                    self.expr(cond);
+                for (i, (cond, body)) in branches.iter().enumerate() {
+                    self.condition(cond, if i == 0 { "if" } else { "elseif" });
                     self.stmts(body);
                 }
                 if let Some(b) = else_branch {
@@ -262,53 +418,177 @@ impl Checker<'_> {
                 }
             }
             Stmt::Loop { body, .. } => self.stmts(body),
-            Stmt::ExitWhen { cond, .. } => self.expr(cond),
-            Stmt::Return { value, .. } => {
-                if let Some(v) = value {
-                    self.expr(v);
+            Stmt::ExitWhen { cond, .. } => self.condition(cond, "exitwhen"),
+            Stmt::Return { value, line } => {
+                let ty = value.as_ref().map(|v| self.expr(v));
+                match (self.returns.clone().flatten(), value) {
+                    (Some(want), Some(v)) => self.expect(ty.flatten(), &want, || "the value returned".to_string(), *line, Some(v.span)),
+                    (None, Some(v)) => {
+                        self.mismatch("the function returns nothing: 'return' takes no value here".to_string(), *line, Some(v.span))
+                    }
+                    // A missing value: `missing-return`'s, or nothing to return.
+                    (_, None) => {}
                 }
             }
             Stmt::Debug { stmt, .. } => self.stmt(stmt),
         }
     }
 
-    fn expr(&mut self, e: &Expr) {
+    fn array(&mut self, message: String, line: usize, span: Option<Span>) {
+        self.push(Diagnostic::error(rule::ARRAY_ACCESS, message, line), span);
+    }
+
+    /// The type of `e`, its parts checked; `None` when it can't be known
+    /// (an unknown name, reported, or another language's).
+    fn expr(&mut self, e: &Expr) -> Option<Ty> {
         let line = e.span.start_line;
         match &e.kind {
-            ExprKind::Var(name) => self.variable(name, line, Some(e.span)),
+            ExprKind::IntLiteral(_) => Some(Ty::of("integer")),
+            ExprKind::RealLiteral(_) => Some(Ty::of("real")),
+            ExprKind::StringLiteral(_) => Some(Ty::of("string")),
+            ExprKind::BoolLiteral(_) => Some(Ty::of("boolean")),
+            ExprKind::Null => Some(Ty::Null),
+            ExprKind::Var(name) => {
+                let var = self.var(name, line, Some(e.span))?;
+                if var.array {
+                    self.array(format!("'{name}' is an array: a value of it needs an index ({name}[i])"), line, Some(e.span));
+                    return None;
+                }
+                Some(Ty::Is(var.ty))
+            }
             ExprKind::ArrayAccess(name, index) => {
-                self.variable(name, line, Some(name_span(e.span, name)));
-                self.expr(index);
+                let var = self.var(name, line, Some(name_span(e.span, name)));
+                self.index(index);
+                let var = var?;
+                if !var.array {
+                    self.array(format!("'{name}' isn't an array: it has no index"), line, Some(name_span(e.span, name)));
+                    return None;
+                }
+                Some(Ty::Is(var.ty))
             }
             ExprKind::Call(name, args) => self.call(name, args, line, Some(name_span(e.span, name))),
-            ExprKind::FuncRef(name) => match self.scope.function(name) {
-                None => self.unknown("the function", name, line, Some(e.span)),
-                Some(Some(sig)) if !sig.params.is_empty() => {
-                    let d = Diagnostic::error(
-                        rule::ARGUMENT_COUNT,
-                        format!("'function {name}' is a code value, and '{name}' takes arguments: a code value's function takes nothing"),
-                        line,
-                    );
-                    self.out.push(d.at(e.span));
+            ExprKind::FuncRef(name) => {
+                match self.scope.function(name) {
+                    None => self.unknown("the function", name, line, Some(e.span)),
+                    Some(Some(sig)) if !sig.params.is_empty() => {
+                        let d = Diagnostic::error(
+                            rule::ARGUMENT_COUNT,
+                            format!("'function {name}' is a code value, and '{name}' takes arguments: a code value's function takes nothing"),
+                            line,
+                        );
+                        self.push(d, Some(e.span));
+                    }
+                    Some(_) => {}
                 }
-                Some(_) => {}
-            },
-            ExprKind::Unary(_, x) => self.expr(x),
-            ExprKind::Binary(a, _, b) => {
-                self.expr(a);
-                self.expr(b);
+                Some(Ty::of("code"))
             }
-            ExprKind::IntLiteral(_) | ExprKind::RealLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::Null => {}
+            ExprKind::Unary(op, x) => {
+                let ty = self.expr(x)?;
+                match op {
+                    UnaryOp::Not => {
+                        self.expect(Some(ty), "boolean", || "the value of 'not'".to_string(), line, Some(x.span));
+                        Some(Ty::of("boolean"))
+                    }
+                    UnaryOp::Neg | UnaryOp::Plus => {
+                        if !ty.numeric() {
+                            self.mismatch(format!("a sign takes a number, not {}", article(ty.name())), line, Some(x.span));
+                            return None;
+                        }
+                        Some(ty)
+                    }
+                }
+            }
+            ExprKind::Binary(a, op, b) => {
+                let (ta, tb) = (self.expr(a), self.expr(b));
+                self.binary(*op, ta, tb, e)
+            }
+        }
+    }
+
+    fn binary(&mut self, op: BinOp, ta: Option<Ty>, tb: Option<Ty>, e: &Expr) -> Option<Ty> {
+        let line = e.span.start_line;
+        let span = Some(e.span);
+        match op {
+            BinOp::And | BinOp::Or => {
+                let word = if op == BinOp::And { "and" } else { "or" };
+                let ExprKind::Binary(a, _, b) = &e.kind else { unreachable!("a binary expression") };
+                self.expect(ta, "boolean", || format!("a side of '{word}'"), line, Some(a.span));
+                self.expect(tb, "boolean", || format!("a side of '{word}'"), line, Some(b.span));
+                Some(Ty::of("boolean"))
+            }
+            BinOp::Eq | BinOp::NotEq => {
+                let (Some(x), Some(y)) = (ta, tb) else { return Some(Ty::of("boolean")) };
+                if !self.comparable(&x, &y) {
+                    self.mismatch(format!("{} and {} can't be compared", article(x.name()), article(y.name())), line, span);
+                }
+                Some(Ty::of("boolean"))
+            }
+            BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+                let (Some(x), Some(y)) = (ta, tb) else { return Some(Ty::of("boolean")) };
+                if !x.numeric() || !y.numeric() {
+                    self.mismatch(format!("{} and {} can't be compared by size: numbers can", article(x.name()), article(y.name())), line, span);
+                }
+                Some(Ty::of("boolean"))
+            }
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+                let (x, y) = (ta?, tb?);
+                if op == BinOp::Add && (x.is("string") || y.is("string")) {
+                    // A string and a string (or null).
+                    let ok = |t: &Ty| t.is("string") || *t == Ty::Null;
+                    if !ok(&x) || !ok(&y) {
+                        self.mismatch(format!("'+' joins a string to a string, not {}", article(if ok(&x) { y.name() } else { x.name() })), line, span);
+                        // Reported once: what it makes isn't known.
+                        return None;
+                    }
+                    return Some(Ty::of("string"));
+                }
+                if !x.numeric() || !y.numeric() {
+                    let sign = match op {
+                        BinOp::Add => "+",
+                        BinOp::Sub => "-",
+                        BinOp::Mul => "*",
+                        _ => "/",
+                    };
+                    let bad = if x.numeric() { &y } else { &x };
+                    self.mismatch(format!("'{sign}' takes numbers, not {}", article(bad.name())), line, span);
+                    return None;
+                }
+                Some(if x.is("real") || y.is("real") { Ty::of("real") } else { Ty::of("integer") })
+            }
+        }
+    }
+
+    /// Can `==` compare these? Numbers with numbers, handles with handles
+    /// (any two: they're all handles), `null` with anything (the game
+    /// takes `x != null` of a boolean too, as map optimizers write it to
+    /// make a boolean 0 or 1), and anything with its own type.
+    fn comparable(&self, x: &Ty, y: &Ty) -> bool {
+        match (x, y) {
+            (Ty::Nothing, _) | (_, Ty::Nothing) => false,
+            (Ty::Null, _) | (_, Ty::Null) => true,
+            (Ty::Is(a), Ty::Is(b)) => {
+                a == b || (x.numeric() && y.numeric()) || (self.scope.is_handle(a) && self.scope.is_handle(b))
+            }
         }
     }
 }
 
-/// The names of the locals declared anywhere in `body`.
-fn collect_locals(body: &[Stmt], out: &mut HashSet<String>) {
+/// `a unit`, `an integer`, `null`, `nothing`. (No type of the game's
+/// starting with `u` is said with `an`: unit, ubersplat, unitpool.)
+fn article(name: &str) -> String {
+    match name {
+        "null" | "nothing" => name.to_string(),
+        n if n.starts_with(['a', 'e', 'i', 'o']) => format!("an {n}"),
+        n => format!("a {n}"),
+    }
+}
+
+/// The locals declared anywhere in `body`: type and whether an array.
+fn collect_locals(body: &[Stmt], out: &mut HashMap<String, (String, bool)>) {
     for s in body {
         match s {
-            Stmt::Local { name, .. } => {
-                out.insert(name.clone());
+            Stmt::Local { name, type_name, is_array, .. } => {
+                out.insert(name.clone(), (type_name.clone(), *is_array));
             }
             Stmt::If { branches, else_branch, .. } => {
                 for (_, b) in branches {

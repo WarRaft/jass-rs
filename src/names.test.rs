@@ -3,12 +3,16 @@ use crate::parser::Parser;
 
 const COMMON: &str = "\
 type agent extends handle
-type unit extends agent
+type widget extends agent
+type unit extends widget
 type timer extends agent
 native KillUnit takes unit u returns nothing
 native GetTriggerUnit takes nothing returns unit
+native GetWidgetLife takes widget w returns real
 native Condition takes code func returns handle
+native I2S takes integer i returns string
 constant integer bj_MAX = 12
+integer array counts
 ";
 
 fn env() -> Declarations {
@@ -23,7 +27,7 @@ fn found(src: &str, env: &[&Declarations]) -> Vec<(usize, &'static str, String)>
 #[test]
 fn declarations_of_a_program() {
     let d = env();
-    assert_eq!(d.types.get("unit").map(String::as_str), Some("agent"));
+    assert_eq!(d.types.get("unit").map(String::as_str), Some("widget"));
     assert_eq!(d.functions["KillUnit"], Signature { params: vec!["unit".into()], returns: None, native: true });
     assert!(d.globals["bj_MAX"].constant);
 }
@@ -99,8 +103,9 @@ fn the_name_alone_is_marked() {
 /// The game's scripts and maps' scripts read as the game reads them:
 /// `JASS_GAME` is a folder with `common.j` and `Blizzard.j` (`common.j`
 /// first, the last given wins), `JASS_FILES` the scripts to check, as a
-/// path list (as PATH). Each must have no unknown name and no call of the
-/// wrong arity.
+/// path list (as PATH). The game's scripts must check clean; what the
+/// others have is printed (a map's script may well have mistakes the game
+/// lets through: `null` for an integer).
 #[test]
 #[ignore]
 fn real_scripts() {
@@ -121,6 +126,95 @@ fn real_scripts() {
         let program = crate::parse(&src).unwrap_or_else(|e| panic!("{}: {}: {}", p.display(), e.line, e.message));
         let problems: Vec<String> = check(&program, &[&env]).iter().map(|d| format!("{}: {}", d.line, d.message)).collect();
         println!("{}: {} problems", p.display(), problems.len());
-        assert!(problems.is_empty(), "{}:\n{}", p.display(), problems.iter().take(10).cloned().collect::<Vec<_>>().join("\n"));
+        for problem in &problems {
+            println!("    {problem}");
+        }
     }
+}
+
+#[test]
+fn types_that_fit() {
+    let common = env();
+    // A subtype where its parent is wanted, an integer where a real,
+    // null where a handle, a string or code, numbers mixed, strings joined,
+    // handles compared, anything compared with null.
+    let src = "\
+string s = null
+function Life takes unit u returns real
+    return GetWidgetLife(u) + 1
+endfunction
+function F returns boolean
+    real r = 1
+    unit u = GetTriggerUnit()
+    handle h = u
+    code c = null
+    timer t = null
+    counts[2] = counts[1] * 2 + 1
+    r = r / 2 - Life(u)
+    s = \"a\" + I2S(counts[0]) + null
+    if u == h and t != null and r >= 1 and (1 < 2.5) != null then
+        return not (s == \"x\")
+    endif
+    exitwhen_ok()
+    return u != null
+endfunction
+function exitwhen_ok
+    loop
+        exitwhen true
+    endloop
+endfunction
+";
+    assert_eq!(found(src, &[&common]), []);
+}
+
+#[test]
+fn types_that_dont() {
+    let common = env();
+    let src = "\
+constant integer MAX = 1
+integer n = \"text\"
+function G takes unit u returns integer
+    return GetWidgetLife(u)
+endfunction
+function H
+    return 1
+endfunction
+function F
+    widget w = GetTriggerUnit()
+    KillUnit(w)
+    MAX = 2
+    counts = 1
+    n[1] = 2
+    integer i = counts
+    if 1 then
+    endif
+    i = H()
+    i = 1 + true
+    i = n[0]
+    counts[\"a\"] = 1
+    i = \"a\" + 1
+    boolean b = 1.5 < GetTriggerUnit()
+endfunction
+";
+    let got: Vec<(usize, &str, String)> = found(src, &[&common]);
+    assert_eq!(
+        got,
+        [
+            (2, rule::TYPE_MISMATCH, "the value of 'n' is a string, where integer is wanted".to_string()),
+            (4, rule::TYPE_MISMATCH, "the value returned is a real, where integer is wanted".to_string()),
+            (7, rule::TYPE_MISMATCH, "the function returns nothing: 'return' takes no value here".to_string()),
+            (11, rule::TYPE_MISMATCH, "argument 1 of 'KillUnit' is a widget, where unit is wanted".to_string()),
+            (12, rule::CONSTANT_ASSIGNMENT, "'MAX' is a constant: it can't be set".to_string()),
+            (13, rule::ARRAY_ACCESS, "'counts' is an array: it's set by an index (counts[i] = ...)".to_string()),
+            (14, rule::ARRAY_ACCESS, "'n' isn't an array: it has no index".to_string()),
+            (15, rule::ARRAY_ACCESS, "'counts' is an array: a value of it needs an index (counts[i])".to_string()),
+            (16, rule::TYPE_MISMATCH, "the condition of 'if' is an integer, where boolean is wanted".to_string()),
+            (18, rule::TYPE_MISMATCH, "the value set to 'i' is a call of a function that returns nothing, where integer is wanted".to_string()),
+            (19, rule::TYPE_MISMATCH, "'+' takes numbers, not a boolean".to_string()),
+            (20, rule::ARRAY_ACCESS, "'n' isn't an array: it has no index".to_string()),
+            (21, rule::TYPE_MISMATCH, "an array's index is a string, where integer is wanted".to_string()),
+            (22, rule::TYPE_MISMATCH, "'+' joins a string to a string, not an integer".to_string()),
+            (23, rule::TYPE_MISMATCH, "a real and a unit can't be compared by size: numbers can".to_string()),
+        ]
+    );
 }

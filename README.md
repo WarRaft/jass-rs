@@ -286,13 +286,32 @@ by default (`infinite-loop` isn't) and how a project switches them
 `names::check` resolves every name a program uses against its own and an
 environment the caller gives (the game's `common.j` and `Blizzard.j`, the
 project's other files: this crate reads no files), and reports
-`unknown-name` (a function, variable or type declared nowhere) and
+`unknown-name` (a function, variable or type declared nowhere),
 `argument-count` (a call of the wrong arity, a code value of a function
-that takes arguments). A local is seen in all of its function (locals go
-anywhere). A name the environment knows without a signature (another
-language's) is known, its calls not counted. `Blizzard.j`, `common.ai`
-and the `war3map.j` of three maps check clean (an ignored test,
-`JASS_GAME` and `JASS_FILES`).
+that takes arguments), and types:
+
+- `type-mismatch`: a value of the wrong type, as an argument, a value set
+  or returned (or returned by a function that returns nothing), a
+  condition (`if`, `elseif`, `exitwhen`: a boolean), an operator's side.
+  A type goes where it or a type it extends is wanted (`unit` where
+  `widget` or `handle`), an `integer` where a `real`, `null` where a
+  handle, a `string` or `code`. Arithmetic takes numbers (an integer
+  and a real make a real), `+` also joins strings, `<` and the like
+  compare numbers, `==` compares numbers with numbers, any two handles,
+  anything with its own type and anything with `null` (map optimizers
+  write `x != null` of a boolean, and the game takes it).
+- `array-access`: an array without its index, an index of what isn't an
+  array (an index is an integer).
+- `constant-assignment`: a constant set.
+
+A value whose type can't be known (an unknown name, another language's)
+isn't checked further, nor is what a wrong operation makes, so one
+mistake is reported once. A local is seen in all of its function (locals
+go anywhere). A name the environment knows without a signature (another
+language's) is known, its calls not counted. `Blizzard.j`, `common.ai`,
+the 41 AI scripts of the campaigns and the `war3map.j` of three maps
+check clean but for one `null` given for an integer, which the game lets
+through (an ignored test, `JASS_GAME` and `JASS_FILES`).
 
 Lint rules: duplicate globals (in `globals` and at the top level),
 functions and locals, and statements outside a function (errors); unused
