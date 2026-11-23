@@ -259,10 +259,74 @@ endfunction
 
 ### vJASS
 
-vJASS (JassHelper) is a preprocessor superset: `library`/`scope`,
-`private`/`public`, `struct`/`interface`/`module`, `method`, `static if`,
-`/* */` comments, `//! textmacro`, `//! zinc` blocks ([Zinc](../zinc-rs)),
-and more. It compiles down to plain JASS.
+vJASS (JassHelper) is a preprocessor superset of JASS, compiled down to
+plain JASS. A file is vJASS when its header says so (`// @dialect vjass`,
+see [Dialects](#dialects-and-embedded-zinc)). On top of JASS it has `/* */`
+comments, `//! zinc` blocks ([Zinc](../zinc-rs)), `.` and:
+
+```jass
+library Counters initializer Init requires Utils, optional TimerUtils  // also library_once; needs, uses
+    globals
+        private integer count = 0          // its library's only
+        public constant integer MAX = 8    // Counters_MAX outside it
+        integer array sized[100]           // a sized array
+    endglobals
+
+    private keyword Ahead                  // a name declared ahead
+    function interface Callback takes integer x returns nothing
+    type IntList extends integer array [16]     // a dynamic array type
+
+    interface Shape
+        method area takes nothing returns real
+        method name takes nothing returns string defaults "shape"
+    endinterface
+
+    module Pooled
+        static method get takes nothing returns thistype
+            return thistype.allocate()
+        endmethod
+    endmodule
+
+    struct Counter[20000] extends Shape    // or extends array, a struct
+        integer value                      // an instance's
+        static integer made = 0            // the struct's
+        private real ratio
+        readonly integer id                // set only inside the struct
+        integer array list[4]
+        implement Pooled                   // implement optional Extra
+
+        static method create takes integer v returns thistype
+            local thistype c = thistype.allocate()
+            set c.list[1] = c.list[0] + 2
+            set .id = thistype.made        // `.id` is `this.id`
+            return c
+        endmethod
+        method operator [] takes integer i returns integer   // also []=, x, x=, <, >
+            return .list[i]
+        endmethod
+        stub method onDestroy takes nothing returns nothing  // a child's may replace it
+            call super.onDestroy()
+        endmethod
+    endstruct
+
+    scope Inner initializer Start          // scopes nest, in libraries too
+        private function Start takes nothing returns nothing
+            call TimerStart(CreateTimer(), 1., false, function Counter.tick)
+            static if LIBRARY_TimerUtils then   // kept or dropped by constants
+                call Callback.evaluate(5)
+            endif
+        endfunction
+    endscope
+endlibrary
+```
+
+Modifiers (`private`, `public`, `static`, `readonly`, `stub`,
+`delegate`, `constant`) come in any order before a declaration.
+`thistype` is the struct a member is in, `this` the instance (`.x` is
+`this.x`), `super` the parent's; `Counter(5)` casts. A member of a
+member and an element of one chain: `a.b[i].c()`. JassHelper's
+preprocessor (`//! textmacro`, `//! runtextmacro`, `//! inject` ...)
+works on text before any of this.
 
 ---
 
@@ -275,7 +339,22 @@ Supported: everything in the reference above **except**:
 | `\r \b \f` escapes                        | decoded as the bare letter                              |
 | locals-first rule                         | `local` is accepted anywhere in a body                  |
 | type checking / declare-before-use        | no symbol or type resolution yet                        |
-| vJASS                                     | `Dialect::VJass` = JASS + vJASS keywords + `/* */` + `//! zinc` blocks; `library`/`struct`/... grammar not yet |
+| vJASS `hook`                              | not read                                                |
+| vJASS `static if` among a struct's members | only in a function's or method's body                  |
+| vJASS member statement after `debug` without `set`/`call` | `debug set .x = 1` reads, `debug .x = 1` doesn't |
+| JassHelper's preprocessor                 | `//! textmacro` and the like are comments to the lexer (a build refuses them) |
+
+vJASS: everything in its reference above, in `Dialect::VJass` only (the
+lexer turns its words and `.` on; in plain JASS `library` is a name). The
+AST has `TopLevel::Library` (scopes too), `Struct`, `Interface`,
+`Module`, `FunctionInterface`, `Keyword`; `Modifiers` on declarations;
+`Stmt::SetMember`, `CallMethod`, `StaticIf`; `ExprKind::Member`,
+`MethodCall`, `Index`, `This`, `ThisType`, `Super`. Lint checks the
+functions in libraries and the methods of structs and modules as it does
+functions (`implicit-keyword` for a member set or called without `set`
+or `call`, which JassHelper requires too); the order rules
+(`declaration-after-function`, `global-outside-globals`) leave vJASS's
+declarations alone, which JassHelper gathers.
 
 Every lint diagnostic names its rule. The rule ids, which rules are on
 by default (`infinite-loop` isn't) and how a project switches them
@@ -316,6 +395,14 @@ language's) is known, its calls not counted. `Blizzard.j`, `common.ai`,
 the 41 AI scripts of the campaigns and the `war3map.j` of three maps
 check clean but for one `null` given for an integer, which the game lets
 through (an ignored test, `JASS_GAME` and `JASS_FILES`).
+
+vJASS: what a library or scope declares is known by its name, a `public`
+one also as `Scope_name`; a struct, interface, module, function
+interface or `keyword` is a name known without its type (a struct's
+values are integers to vJASS, so they go anywhere); `thistype` is a type,
+`LIBRARY_<name>` a boolean constant. A member (`a.b`, `a.b()`, `this`)
+has the names it uses checked, and no type: what `a` is, and who may see
+a private name, take vJASS's own resolution, which the build does.
 
 Lint rules: duplicate globals (in `globals` and at the top level),
 functions and locals, and statements outside a function (errors); unused

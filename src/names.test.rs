@@ -242,3 +242,20 @@ native S takes nothing returns string // \"//\" isn't one
     assert_eq!(comment_of(src, 12), "\"//\" isn't one");
     assert_eq!(comment_of(src, 1), "");
 }
+
+#[test]
+fn vjass_names_and_members() {
+    let src = include_str!("../tests/fixtures/vjass.j");
+    let prog = crate::Parser::parse_str_with(src, crate::Dialect::VJass).unwrap();
+    let d = Declarations::of(&prog);
+    // A library's names by theirs, a public one as `Scope_name` too.
+    assert!(d.globals.contains_key("count") && d.globals.contains_key("Counters_MAX"));
+    assert!(d.functions.contains_key("Init") && d.functions.contains_key("Start"));
+    for n in ["Counter", "Shape", "Pooled", "Callback", "Ahead", "IntList"] {
+        assert!(d.others.contains(n), "{n}");
+    }
+    // Without the game's declarations only the game's names are unknown:
+    // members, `this`, casts and `function Counter.tick` aren't.
+    let found: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
+    assert_eq!(found, ["the function 'CreateTimer' is declared nowhere", "the function 'TimerStart' is declared nowhere"], "{found:#?}");
+}

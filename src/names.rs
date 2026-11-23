@@ -25,6 +25,15 @@
 //!
 //! A name the environment knows without a signature ([`Declarations::name`]:
 //! a public Zinc function, say) is known, and its calls aren't counted.
+//!
+//! vJASS: what a library or scope declares is known by its name (a
+//! `public` one also as `Scope_name`); a struct, interface, module,
+//! function interface or `keyword` is a name known without its type (a
+//! struct's values are integers to vJASS: they go anywhere). A member
+//! (`a.b`, `a.b()`, `this`) has the names it uses checked, and no type:
+//! what `a` is takes vJASS's own resolution (the build's). `thistype` is
+//! a type, and `LIBRARY_<name>` a boolean constant (whether the library
+//! is there).
 
 use std::collections::{HashMap, HashSet};
 
@@ -70,19 +79,50 @@ impl Declarations {
     /// their names come with their own language.
     pub fn of(program: &Program) -> Declarations {
         let mut d = Declarations::default();
-        for item in &program.items {
+        d.add_items(&program.items, None);
+        d
+    }
+
+    /// The declarations of `items`, in vJASS's library or scope `scope`.
+    fn add_items(&mut self, items: &[TopLevel], scope: Option<&str>) {
+        // A `public` one is everyone's as `Scope_name` too.
+        let public = |name: &str, m: &Modifiers| match (scope, m.access) {
+            (Some(s), Access::Public) => Some(format!("{s}_{name}")),
+            _ => None,
+        };
+        for item in items {
             match item {
-                TopLevel::Function(f) => d.add_sig(&f.sig, false),
-                TopLevel::Native(sig) => d.add_sig(sig, true),
-                TopLevel::Globals(decls) => decls.iter().for_each(|g| d.add_global(g)),
-                TopLevel::Global(g) => d.add_global(g),
-                TopLevel::TypeDef { name, extends, .. } => {
-                    d.types.insert(name.clone(), extends.clone());
+                TopLevel::Function(f) => {
+                    self.add_sig(&f.sig, false);
+                    if let Some(n) = public(&f.sig.name, &f.sig.modifiers) {
+                        self.add_sig(&FunctionSig { name: n, ..f.sig.clone() }, false);
+                    }
+                }
+                TopLevel::Native(sig) => self.add_sig(sig, true),
+                TopLevel::Globals(decls) => {
+                    for g in decls {
+                        self.add_global(g);
+                        if let Some(n) = public(&g.name, &g.modifiers) {
+                            self.add_global(&GlobalDecl { name: n, ..g.clone() });
+                        }
+                    }
+                }
+                TopLevel::Global(g) => self.add_global(g),
+                TopLevel::TypeDef { name, extends, size: None, .. } => {
+                    self.types.insert(name.clone(), extends.clone());
+                }
+                TopLevel::Library(l) => self.add_items(&l.items, Some(&l.name)),
+                TopLevel::TypeDef { name, .. }
+                | TopLevel::Struct(StructDecl { name, .. })
+                | TopLevel::Interface(TypeDecl { name, .. })
+                | TopLevel::Module(TypeDecl { name, .. })
+                | TopLevel::FunctionInterface(FunctionSig { name, .. })
+                | TopLevel::Keyword { name, .. } => {
+                    self.others.insert(name.clone());
                 }
                 TopLevel::Stmt(_) | TopLevel::Zinc(_) => {}
             }
         }
-        d
     }
 
     fn add_sig(&mut self, sig: &FunctionSig, native: bool) {
@@ -188,7 +228,7 @@ impl Scope<'_> {
     }
 
     fn type_known(&self, name: &str) -> bool {
-        PRIMITIVES.contains(&name) || self.all().any(|d| d.types.contains_key(name) || d.others.contains(name))
+        PRIMITIVES.contains(&name) || name == "thistype" || self.all().any(|d| d.types.contains_key(name) || d.others.contains(name))
     }
 
     /// The type `name` extends, if it's one of the declared types.
@@ -221,6 +261,11 @@ impl Scope<'_> {
     /// a handle, a string or code; an integer into a real; a type into one
     /// it extends.
     fn assignable(&self, from: &Ty, to: &str) -> bool {
+        // vJASS's types (a struct's values are integers): anything.
+        let unchecked = |t: &str| t == "thistype" || self.all().any(|d| d.others.contains(t));
+        if unchecked(to) || matches!(from, Ty::Is(f) if unchecked(f)) {
+            return true;
+        }
         match from {
             Ty::Null => to == "string" || to == "code" || self.is_handle(to),
             Ty::Nothing => false,
@@ -268,16 +313,7 @@ pub fn check(program: &Program, env: &[&Declarations]) -> Vec<Diagnostic> {
     let own = Declarations::of(program);
     let scope = Scope { own: &own, env };
     let mut c = Checker { scope, out: Vec::new(), locals: HashMap::new(), returns: None };
-    for item in &program.items {
-        match item {
-            TopLevel::Function(f) => c.function(f),
-            TopLevel::Native(sig) => c.signature(sig),
-            TopLevel::Globals(decls) => decls.iter().for_each(|g| c.global(g)),
-            TopLevel::Global(g) => c.global(g),
-            TopLevel::TypeDef { extends, line, .. } => c.type_name(extends, *line),
-            TopLevel::Stmt(_) | TopLevel::Zinc(_) => {}
-        }
-    }
+    c.items(&program.items);
     c.out.sort_by_key(|d| d.line);
     c.out
 }
@@ -307,6 +343,32 @@ fn name_span(span: Span, name: &str) -> Span {
 }
 
 impl Checker<'_> {
+    fn items(&mut self, items: &[TopLevel]) {
+        for item in items {
+            match item {
+                TopLevel::Function(f) => self.function(f),
+                TopLevel::Native(sig) | TopLevel::FunctionInterface(sig) => self.signature(sig),
+                TopLevel::Globals(decls) => decls.iter().for_each(|g| self.global(g)),
+                TopLevel::Global(g) => self.global(g),
+                TopLevel::TypeDef { extends, line, .. } => self.type_name(extends, *line),
+                TopLevel::Library(l) => self.items(&l.items),
+                TopLevel::Struct(StructDecl { members, .. }) | TopLevel::Module(TypeDecl { members, .. }) | TopLevel::Interface(TypeDecl { members, .. }) => {
+                    for m in members {
+                        match m {
+                            StructMember::Field(g) => self.global(g),
+                            StructMember::Method(MethodDecl { sig, body: Some(body), .. }) => {
+                                self.function(&FunctionDecl { sig: sig.clone(), body: body.clone() });
+                            }
+                            StructMember::Method(MethodDecl { sig, .. }) => self.signature(sig),
+                            StructMember::Implement { .. } => {}
+                        }
+                    }
+                }
+                TopLevel::Stmt(_) | TopLevel::Zinc(_) | TopLevel::Keyword { .. } => {}
+            }
+        }
+    }
+
     fn push(&mut self, d: Diagnostic, span: Option<Span>) {
         self.out.push(match span {
             Some(s) => d.at(s),
@@ -375,6 +437,10 @@ impl Checker<'_> {
         if let Some((ty, array)) = self.locals.get(name) {
             return Some(Var { ty: ty.clone(), array: *array, constant: false });
         }
+        // vJASS: whether a library is there, false when it isn't.
+        if name.strip_prefix("LIBRARY_").is_some_and(|l| !l.is_empty()) {
+            return Some(Var { ty: "boolean".into(), array: false, constant: true });
+        }
         match self.scope.global(name) {
             Some(Some(g)) => Some(Var { ty: g.type_name.clone(), array: g.is_array, constant: g.constant }),
             Some(None) => None,
@@ -393,6 +459,10 @@ impl Checker<'_> {
 
     fn call(&mut self, name: &str, args: &[Expr], line: usize, span: Option<Span>) -> Option<Ty> {
         let types: Vec<Option<Ty>> = args.iter().map(|a| self.expr(a)).collect();
+        // vJASS: `thistype(x)`, a cast.
+        if name == "thistype" {
+            return None;
+        }
         let sig = match self.scope.function(name) {
             None => {
                 self.unknown("the function", name, line, span);
@@ -480,6 +550,25 @@ impl Checker<'_> {
                 }
             }
             Stmt::Debug { stmt, .. } => self.stmt(stmt),
+            Stmt::SetMember { target, index, value, .. } => {
+                self.expr(target);
+                if let Some(i) = index {
+                    self.index(i);
+                }
+                self.expr(value);
+            }
+            Stmt::CallMethod { call, .. } => {
+                self.expr(call);
+            }
+            Stmt::StaticIf { branches, else_branch, .. } => {
+                for (cond, body) in branches {
+                    self.condition(cond, "static if");
+                    self.stmts(body);
+                }
+                if let Some(b) = else_branch {
+                    self.stmts(b);
+                }
+            }
         }
     }
 
@@ -516,6 +605,8 @@ impl Checker<'_> {
                 Some(Ty::Is(var.ty))
             }
             ExprKind::Call(name, args) => self.call(name, args, line, Some(name_span(e.span, name))),
+            // vJASS: `function Data.onTimer`, a method.
+            ExprKind::FuncRef(name) if name.contains('.') => Some(Ty::of("code")),
             ExprKind::FuncRef(name) => {
                 match self.scope.function(name) {
                     None => self.unknown("the function", name, line, Some(e.span)),
@@ -551,6 +642,14 @@ impl Checker<'_> {
                 let (ta, tb) = (self.expr(a), self.expr(b));
                 self.binary(*op, ta, tb, e)
             }
+            // vJASS: its parts checked, its type unknown here.
+            ExprKind::Member(..) | ExprKind::MethodCall(..) | ExprKind::Index(..) => {
+                for c in e.children() {
+                    self.expr(c);
+                }
+                None
+            }
+            ExprKind::This | ExprKind::ThisType | ExprKind::Super => None,
         }
     }
 

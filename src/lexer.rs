@@ -17,26 +17,49 @@ pub const SPEC: LexSpec = LexSpec {
     line_comment: "//",
     block_comment: None,
     rawcodes: true,
-    puncts: &[
-        Punct::Plus,
-        Punct::Minus,
-        Punct::Star,
-        Punct::Slash,
-        Punct::EqEq,
-        Punct::NotEq,
-        Punct::Gt,
-        Punct::Lt,
-        Punct::GtEq,
-        Punct::LtEq,
-        Punct::Assign,
-        Punct::LParen,
-        Punct::RParen,
-        Punct::LBracket,
-        Punct::RBracket,
-        Punct::Comma,
-    ],
+    puncts: JASS_PUNCTS,
     ..LexSpec::BASE
 };
+
+const JASS_PUNCTS: &[Punct] = &[
+    Punct::Plus,
+    Punct::Minus,
+    Punct::Star,
+    Punct::Slash,
+    Punct::EqEq,
+    Punct::NotEq,
+    Punct::Gt,
+    Punct::Lt,
+    Punct::GtEq,
+    Punct::LtEq,
+    Punct::Assign,
+    Punct::LParen,
+    Punct::RParen,
+    Punct::LBracket,
+    Punct::RBracket,
+    Punct::Comma,
+];
+
+/// vJASS's: JASS's and `.` (members).
+const VJASS_PUNCTS: &[Punct] = &[
+    Punct::Plus,
+    Punct::Minus,
+    Punct::Star,
+    Punct::Slash,
+    Punct::EqEq,
+    Punct::NotEq,
+    Punct::Gt,
+    Punct::Lt,
+    Punct::GtEq,
+    Punct::LtEq,
+    Punct::Assign,
+    Punct::LParen,
+    Punct::RParen,
+    Punct::LBracket,
+    Punct::RBracket,
+    Punct::Comma,
+    Punct::Dot,
+];
 
 /// A `//! zinc` ... `//! endzinc` block: Zinc embedded in vJASS. The lexer
 /// turns each block into one `TokenKind::Embedded` token, and the parser
@@ -55,6 +78,7 @@ pub const VJASS_SPEC: LexSpec = LexSpec {
     keywords: VJASS_KEYWORDS,
     block_comment: Some(("/*", "*/")),
     embeds: &[ZINC_EMBED],
+    puncts: VJASS_PUNCTS,
     ..SPEC
 };
 

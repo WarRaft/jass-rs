@@ -43,26 +43,12 @@ fn top_level_line(item: &TopLevel) -> usize {
         // Never itself returned by a search (only its children are), so
         // this placeholder is never actually observed.
         TopLevel::Globals(_) => 0,
-        TopLevel::Global(d) => d.line,
-        TopLevel::Stmt(s) => stmt_line(s),
-        TopLevel::TypeDef { line, .. } => *line,
-        TopLevel::Native(sig) => sig.line,
-        TopLevel::Function(f) => f.sig.line,
-        TopLevel::Zinc(block) => block.open.start_line,
+        other => other.line(),
     }
 }
 
 fn stmt_line(s: &Stmt) -> usize {
-    match s {
-        Stmt::Local { line, .. }
-        | Stmt::Set { line, .. }
-        | Stmt::Call { line, .. }
-        | Stmt::If { line, .. }
-        | Stmt::Loop { line, .. }
-        | Stmt::ExitWhen { line, .. }
-        | Stmt::Return { line, .. }
-        | Stmt::Debug { line, .. } => *line,
-    }
+    s.line()
 }
 
 /// Finds the most specific (deepest) AST node whose span contains the
@@ -145,6 +131,26 @@ fn find_in_top_level<'a>(
                     ec,
                 )
             }),
+        TopLevel::Library(l) => l.items.iter().find_map(|i| find_in_top_level(i, line, sc, ec)),
+        TopLevel::Struct(StructDecl { members, line: l, .. })
+        | TopLevel::Interface(TypeDecl { members, line: l, .. })
+        | TopLevel::Module(TypeDecl { members, line: l, .. }) => members
+            .iter()
+            .find_map(|m| find_in_member(m, line, sc, ec))
+            .or_else(|| self_or_none(AstRef::TopLevel(item), Span::whole_line(*l), line, sc, ec)),
+        TopLevel::FunctionInterface(sig) => self_or_none(AstRef::TopLevel(item), Span::whole_line(sig.line), line, sc, ec),
+        TopLevel::Keyword { line: l, .. } => self_or_none(AstRef::TopLevel(item), Span::whole_line(*l), line, sc, ec),
+    }
+}
+
+/// A struct's, interface's or module's member: a field (its declaration),
+/// or a method's statements.
+fn find_in_member<'a>(m: &'a StructMember, line: usize, sc: usize, ec: usize) -> Option<AstRef<'a>> {
+    match m {
+        StructMember::Field(d) => find_in_expr_opt(d.initializer.as_ref(), line, sc, ec)
+            .or_else(|| self_or_none(AstRef::GlobalDecl(d), Span::whole_line(d.line), line, sc, ec)),
+        StructMember::Method(md) => md.body.iter().flatten().find_map(|s| find_in_stmt(s, line, sc, ec)),
+        StructMember::Implement { .. } => None,
     }
 }
 
@@ -174,6 +180,14 @@ fn find_in_stmt<'a>(s: &'a Stmt, line: usize, sc: usize, ec: usize) -> Option<As
         Stmt::ExitWhen { cond, .. } => find_in_expr(cond, line, sc, ec),
         Stmt::Return { value, .. } => find_in_expr_opt(value.as_ref(), line, sc, ec),
         Stmt::Debug { stmt, .. } => find_in_stmt(stmt, line, sc, ec),
+        Stmt::SetMember { target, index, value, .. } => find_in_expr(target, line, sc, ec)
+            .or_else(|| find_in_expr_opt(index.as_ref(), line, sc, ec))
+            .or_else(|| find_in_expr(value, line, sc, ec)),
+        Stmt::CallMethod { call, .. } => find_in_expr(call, line, sc, ec),
+        Stmt::StaticIf { branches, else_branch, .. } => branches
+            .iter()
+            .find_map(|(cond, body)| find_in_expr(cond, line, sc, ec).or_else(|| body.iter().find_map(|st| find_in_stmt(st, line, sc, ec))))
+            .or_else(|| else_branch.as_ref().and_then(|body| body.iter().find_map(|st| find_in_stmt(st, line, sc, ec)))),
     };
     child_hit.or_else(|| self_or_none(AstRef::Stmt(s), own, line, sc, ec))
 }
@@ -186,13 +200,17 @@ fn find_in_expr<'a>(e: &'a Expr, line: usize, sc: usize, ec: usize) -> Option<As
         ExprKind::Binary(l, _, r) => {
             find_in_expr(l, line, sc, ec).or_else(|| find_in_expr(r, line, sc, ec))
         }
+        ExprKind::Member(..) | ExprKind::MethodCall(..) | ExprKind::Index(..) => e.children().into_iter().find_map(|c| find_in_expr(c, line, sc, ec)),
         ExprKind::IntLiteral(_)
         | ExprKind::RealLiteral(_)
         | ExprKind::StringLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
         | ExprKind::Var(_)
-        | ExprKind::FuncRef(_) => None,
+        | ExprKind::FuncRef(_)
+        | ExprKind::This
+        | ExprKind::ThisType
+        | ExprKind::Super => None,
     };
     child_hit.or_else(|| self_or_none(AstRef::Expr(e), e.span, line, sc, ec))
 }

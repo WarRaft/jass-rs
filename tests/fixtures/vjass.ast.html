@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vjass.j — AST</title>
+<style>
+  :root {
+    --bg: #1e1f22;
+    --bg-panel: #202124;
+    --bg-alt: #26272b;
+    --fg: #d4d4d8;
+    --fg-dim: #7a7d85;
+    --border: #34353a;
+    --accent: #ffcc66;
+    --active-line: #3a3d1f;
+    --select-bg: #4d5f2e;
+    --select-ring: #a3c65a;
+
+    --c-root: #8a8f98;
+    --c-container: #6b7280;
+    --c-decl: #4fd1c5;
+    --c-sig: #b794f4;
+    --c-stmt: #63b3ed;
+    --c-expr: #f6ad55;
+    --c-lit: #68d391;
+    --c-node: #a0aec0;
+
+    --tok-kw: #c586c0;
+    --tok-str: #ce9178;
+    --tok-num: #b5cea8;
+    --tok-com: #6a9955;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff;
+      --bg-panel: #f7f7f8;
+      --bg-alt: #f0f0f2;
+      --fg: #1f2328;
+      --fg-dim: #6e7781;
+      --border: #d8dee4;
+      --accent: #a6650a;
+      --active-line: #fff3c4;
+      --select-bg: #cdeb9e;
+      --select-ring: #6a9a2d;
+
+      --c-root: #57606a;
+      --c-container: #6e7781;
+      --c-decl: #0f8a7d;
+      --c-sig: #7c3fd4;
+      --c-stmt: #1a68c4;
+      --c-expr: #c2650a;
+      --c-lit: #1a7f37;
+      --c-node: #57606a;
+
+      --tok-kw: #9926b3;
+      --tok-str: #a6650a;
+      --tok-num: #1a7f37;
+      --tok-com: #6e7781;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+  }
+  .toolbar .brand { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .toolbar .file { color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .toolbar input {
+    flex: 0 1 220px;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font: inherit;
+  }
+  .toolbar button {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .toolbar button:hover { border-color: var(--accent); }
+  .toolbar .spacer { flex: 1; }
+  .toolbar .count { color: var(--fg-dim); white-space: nowrap; }
+  .toolbar .hint { color: var(--fg-dim); white-space: nowrap; font-size: 11px; }
+
+  .legend { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .tag-root { color: var(--c-root); }
+  .tag-container { color: var(--c-container); }
+  .tag-decl { color: var(--c-decl); }
+  .tag-sig { color: var(--c-sig); }
+  .tag-stmt { color: var(--c-stmt); }
+  .tag-expr { color: var(--c-expr); }
+  .tag-lit { color: var(--c-lit); }
+
+  .panes {
+    display: flex;
+    height: calc(100% - 41px);
+  }
+  .source, .tree {
+    overflow: auto;
+    height: 100%;
+  }
+  .source {
+    flex: 0 0 42%;
+    margin: 0;
+    padding: 8px 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg-panel);
+    white-space: pre;
+    line-height: 1.5;
+  }
+  .tree {
+    flex: 1;
+    padding: 10px 12px;
+  }
+
+  .line { display: flex; padding: 0 12px; }
+  .line.active { background: var(--active-line); }
+  .ln {
+    color: var(--fg-dim);
+    width: 3em;
+    flex: none;
+    text-align: right;
+    padding-right: 12px;
+    user-select: none;
+  }
+  .code { white-space: pre; }
+  .tok-kw { color: var(--tok-kw); }
+  .tok-str { color: var(--tok-str); }
+  .tok-num { color: var(--tok-num); }
+  .tok-com { color: var(--tok-com); font-style: italic; }
+  .code .tok:hover { background: var(--bg-alt); border-radius: 2px; cursor: pointer; }
+  .tok.selected {
+    background: var(--select-bg);
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px var(--select-ring);
+  }
+
+  .node { position: relative; }
+  .node-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 1px 4px;
+    padding-left: calc(var(--depth, 0) * 16px);
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .node-head:hover { background: var(--bg-alt); }
+  .node.match > .node-head { background: var(--active-line); }
+  .node.picked > .node-head {
+    background: var(--select-bg);
+    box-shadow: 0 0 0 1px var(--select-ring);
+  }
+  .toggle {
+    color: var(--fg-dim);
+    width: 12px;
+    flex: none;
+    text-align: center;
+    user-select: none;
+  }
+  .node[data-has-children="false"] > .node-head > .toggle { visibility: hidden; }
+  .label { white-space: pre; }
+  .kind-root > .node-head > .label { color: var(--c-root); }
+  .kind-container > .node-head > .label { color: var(--c-container); }
+  .kind-decl > .node-head > .label { color: var(--c-decl); }
+  .kind-sig > .node-head > .label { color: var(--c-sig); font-weight: 600; }
+  .kind-stmt > .node-head > .label { color: var(--c-stmt); }
+  .kind-expr > .node-head > .label { color: var(--c-expr); }
+  .kind-lit > .node-head > .label { color: var(--c-lit); }
+  .kind-node > .node-head > .label { color: var(--c-node); }
+  .linetag {
+    color: var(--fg-dim);
+    font-size: 11px;
+  }
+  .node.collapsed > .children { display: none; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <span class="brand">jass-rs</span>
+    <span class="file">vjass.j</span>
+    <input id="filter" type="text" placeholder="filter nodes…">
+    <button id="expandAll">Expand all</button>
+    <button id="collapseAll">Collapse all</button>
+    <span class="spacer"></span>
+    <span class="hint">click source ↔ tree to sync</span>
+    <span class="count" id="nodeCount"></span>
+    <span class="legend">
+      <span class="tag tag-sig">sig</span>
+      <span class="tag tag-stmt">stmt</span>
+      <span class="tag tag-expr">expr</span>
+      <span class="tag tag-lit">lit</span>
+      <span class="tag tag-decl">decl</span>
+      <span class="tag tag-container">container</span>
+    </span>
+  </div>
+  <div class="panes">
+    <pre id="source" class="source"><div class="line" id="L1"><span class="ln">1</span><span class="code"><span class="tok tok-com" data-scol="1" data-ecol="18">// @dialect vjass</span></span></div>
+<div class="line" id="L2"><span class="ln">2</span><span class="code"><span class="tok tok-kw" data-scol="1" data-ecol="8">library</span> <span class="tok tok-ident" data-scol="9" data-ecol="17">Counters</span> <span class="tok tok-kw" data-scol="18" data-ecol="29">initializer</span> <span class="tok tok-ident" data-scol="30" data-ecol="34">Init</span> <span class="tok tok-kw" data-scol="35" data-ecol="43">requires</span> <span class="tok tok-ident" data-scol="44" data-ecol="49">Utils</span><span class="tok tok-punct" data-scol="49" data-ecol="50">,</span> <span class="tok tok-kw" data-scol="51" data-ecol="59">optional</span> <span class="tok tok-ident" data-scol="60" data-ecol="70">TimerUtils</span></span></div>
+<div class="line" id="L3"><span class="ln">3</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="12">globals</span></span></div>
+<div class="line" id="L4"><span class="ln">4</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="16">private</span> <span class="tok tok-ident" data-scol="17" data-ecol="24">integer</span> <span class="tok tok-ident" data-scol="25" data-ecol="30">count</span> <span class="tok tok-punct" data-scol="31" data-ecol="32">=</span> <span class="tok tok-num" data-scol="33" data-ecol="34">0</span></span></div>
+<div class="line" id="L5"><span class="ln">5</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="15">public</span> <span class="tok tok-kw" data-scol="16" data-ecol="24">constant</span> <span class="tok tok-ident" data-scol="25" data-ecol="32">integer</span> <span class="tok tok-ident" data-scol="33" data-ecol="36">MAX</span> <span class="tok tok-punct" data-scol="37" data-ecol="38">=</span> <span class="tok tok-num" data-scol="39" data-ecol="40">8</span></span></div>
+<div class="line" id="L6"><span class="ln">6</span><span class="code">        <span class="tok tok-ident" data-scol="9" data-ecol="16">integer</span> <span class="tok tok-kw" data-scol="17" data-ecol="22">array</span> <span class="tok tok-ident" data-scol="23" data-ecol="28">sized</span><span class="tok tok-punct" data-scol="28" data-ecol="29">[</span><span class="tok tok-num" data-scol="29" data-ecol="32">100</span><span class="tok tok-punct" data-scol="32" data-ecol="33">]</span></span></div>
+<div class="line" id="L7"><span class="ln">7</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="15">endglobals</span></span></div>
+<div class="line" id="L8"><span class="ln">8</span><span class="code"></span></div>
+<div class="line" id="L9"><span class="ln">9</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="12">private</span> <span class="tok tok-kw" data-scol="13" data-ecol="20">keyword</span> <span class="tok tok-ident" data-scol="21" data-ecol="26">Ahead</span></span></div>
+<div class="line" id="L10"><span class="ln">10</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="13">function</span> <span class="tok tok-kw" data-scol="14" data-ecol="23">interface</span> <span class="tok tok-ident" data-scol="24" data-ecol="32">Callback</span> <span class="tok tok-kw" data-scol="33" data-ecol="38">takes</span> <span class="tok tok-ident" data-scol="39" data-ecol="46">integer</span> <span class="tok tok-ident" data-scol="47" data-ecol="48">x</span> <span class="tok tok-kw" data-scol="49" data-ecol="56">returns</span> <span class="tok tok-kw" data-scol="57" data-ecol="64">nothing</span></span></div>
+<div class="line" id="L11"><span class="ln">11</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="9">type</span> <span class="tok tok-ident" data-scol="10" data-ecol="17">IntList</span> <span class="tok tok-kw" data-scol="18" data-ecol="25">extends</span> <span class="tok tok-ident" data-scol="26" data-ecol="33">integer</span> <span class="tok tok-kw" data-scol="34" data-ecol="39">array</span> <span class="tok tok-punct" data-scol="40" data-ecol="41">[</span><span class="tok tok-num" data-scol="41" data-ecol="43">16</span><span class="tok tok-punct" data-scol="43" data-ecol="44">]</span></span></div>
+<div class="line" id="L12"><span class="ln">12</span><span class="code"></span></div>
+<div class="line" id="L13"><span class="ln">13</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="14">interface</span> <span class="tok tok-ident" data-scol="15" data-ecol="20">Shape</span></span></div>
+<div class="line" id="L14"><span class="ln">14</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="15">method</span> <span class="tok tok-ident" data-scol="16" data-ecol="20">area</span> <span class="tok tok-kw" data-scol="21" data-ecol="26">takes</span> <span class="tok tok-kw" data-scol="27" data-ecol="34">nothing</span> <span class="tok tok-kw" data-scol="35" data-ecol="42">returns</span> <span class="tok tok-ident" data-scol="43" data-ecol="47">real</span></span></div>
+<div class="line" id="L15"><span class="ln">15</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="15">method</span> <span class="tok tok-ident" data-scol="16" data-ecol="20">name</span> <span class="tok tok-kw" data-scol="21" data-ecol="26">takes</span> <span class="tok tok-kw" data-scol="27" data-ecol="34">nothing</span> <span class="tok tok-kw" data-scol="35" data-ecol="42">returns</span> <span class="tok tok-ident" data-scol="43" data-ecol="49">string</span> <span class="tok tok-kw" data-scol="50" data-ecol="58">defaults</span> <span class="tok tok-str" data-scol="59" data-ecol="66">"shape"</span></span></div>
+<div class="line" id="L16"><span class="ln">16</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="17">endinterface</span></span></div>
+<div class="line" id="L17"><span class="ln">17</span><span class="code"></span></div>
+<div class="line" id="L18"><span class="ln">18</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="11">module</span> <span class="tok tok-ident" data-scol="12" data-ecol="18">Pooled</span></span></div>
+<div class="line" id="L19"><span class="ln">19</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="15">static</span> <span class="tok tok-kw" data-scol="16" data-ecol="22">method</span> <span class="tok tok-ident" data-scol="23" data-ecol="26">get</span> <span class="tok tok-kw" data-scol="27" data-ecol="32">takes</span> <span class="tok tok-kw" data-scol="33" data-ecol="40">nothing</span> <span class="tok tok-kw" data-scol="41" data-ecol="48">returns</span> <span class="tok tok-kw" data-scol="49" data-ecol="57">thistype</span></span></div>
+<div class="line" id="L20"><span class="ln">20</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="19">return</span> <span class="tok tok-kw" data-scol="20" data-ecol="28">thistype</span><span class="tok tok-punct" data-scol="28" data-ecol="29">.</span><span class="tok tok-ident" data-scol="29" data-ecol="37">allocate</span><span class="tok tok-punct" data-scol="37" data-ecol="38">(</span><span class="tok tok-punct" data-scol="38" data-ecol="39">)</span></span></div>
+<div class="line" id="L21"><span class="ln">21</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="18">endmethod</span></span></div>
+<div class="line" id="L22"><span class="ln">22</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="14">endmodule</span></span></div>
+<div class="line" id="L23"><span class="ln">23</span><span class="code"></span></div>
+<div class="line" id="L24"><span class="ln">24</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="11">struct</span> <span class="tok tok-ident" data-scol="12" data-ecol="19">Counter</span><span class="tok tok-punct" data-scol="19" data-ecol="20">[</span><span class="tok tok-num" data-scol="20" data-ecol="25">20000</span><span class="tok tok-punct" data-scol="25" data-ecol="26">]</span> <span class="tok tok-kw" data-scol="27" data-ecol="34">extends</span> <span class="tok tok-ident" data-scol="35" data-ecol="40">Shape</span></span></div>
+<div class="line" id="L25"><span class="ln">25</span><span class="code">        <span class="tok tok-ident" data-scol="9" data-ecol="16">integer</span> <span class="tok tok-ident" data-scol="17" data-ecol="22">value</span></span></div>
+<div class="line" id="L26"><span class="ln">26</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="15">static</span> <span class="tok tok-ident" data-scol="16" data-ecol="23">integer</span> <span class="tok tok-ident" data-scol="24" data-ecol="28">made</span> <span class="tok tok-punct" data-scol="29" data-ecol="30">=</span> <span class="tok tok-num" data-scol="31" data-ecol="32">0</span></span></div>
+<div class="line" id="L27"><span class="ln">27</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="16">private</span> <span class="tok tok-ident" data-scol="17" data-ecol="21">real</span> <span class="tok tok-ident" data-scol="22" data-ecol="27">ratio</span></span></div>
+<div class="line" id="L28"><span class="ln">28</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="17">readonly</span> <span class="tok tok-ident" data-scol="18" data-ecol="25">integer</span> <span class="tok tok-ident" data-scol="26" data-ecol="28">id</span></span></div>
+<div class="line" id="L29"><span class="ln">29</span><span class="code">        <span class="tok tok-ident" data-scol="9" data-ecol="16">integer</span> <span class="tok tok-kw" data-scol="17" data-ecol="22">array</span> <span class="tok tok-ident" data-scol="23" data-ecol="27">list</span><span class="tok tok-punct" data-scol="27" data-ecol="28">[</span><span class="tok tok-num" data-scol="28" data-ecol="29">4</span><span class="tok tok-punct" data-scol="29" data-ecol="30">]</span></span></div>
+<div class="line" id="L30"><span class="ln">30</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="18">implement</span> <span class="tok tok-ident" data-scol="19" data-ecol="25">Pooled</span></span></div>
+<div class="line" id="L31"><span class="ln">31</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="18">implement</span> <span class="tok tok-kw" data-scol="19" data-ecol="27">optional</span> <span class="tok tok-ident" data-scol="28" data-ecol="33">Extra</span></span></div>
+<div class="line" id="L32"><span class="ln">32</span><span class="code"></span></div>
+<div class="line" id="L33"><span class="ln">33</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="15">static</span> <span class="tok tok-kw" data-scol="16" data-ecol="22">method</span> <span class="tok tok-ident" data-scol="23" data-ecol="29">create</span> <span class="tok tok-kw" data-scol="30" data-ecol="35">takes</span> <span class="tok tok-ident" data-scol="36" data-ecol="43">integer</span> <span class="tok tok-ident" data-scol="44" data-ecol="45">v</span> <span class="tok tok-kw" data-scol="46" data-ecol="53">returns</span> <span class="tok tok-kw" data-scol="54" data-ecol="62">thistype</span></span></div>
+<div class="line" id="L34"><span class="ln">34</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="18">local</span> <span class="tok tok-kw" data-scol="19" data-ecol="27">thistype</span> <span class="tok tok-ident" data-scol="28" data-ecol="29">c</span> <span class="tok tok-punct" data-scol="30" data-ecol="31">=</span> <span class="tok tok-kw" data-scol="32" data-ecol="40">thistype</span><span class="tok tok-punct" data-scol="40" data-ecol="41">.</span><span class="tok tok-ident" data-scol="41" data-ecol="49">allocate</span><span class="tok tok-punct" data-scol="49" data-ecol="50">(</span><span class="tok tok-punct" data-scol="50" data-ecol="51">)</span></span></div>
+<div class="line" id="L35"><span class="ln">35</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="16">set</span> <span class="tok tok-ident" data-scol="17" data-ecol="18">c</span><span class="tok tok-punct" data-scol="18" data-ecol="19">.</span><span class="tok tok-ident" data-scol="19" data-ecol="24">value</span> <span class="tok tok-punct" data-scol="25" data-ecol="26">=</span> <span class="tok tok-ident" data-scol="27" data-ecol="28">v</span></span></div>
+<div class="line" id="L36"><span class="ln">36</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="16">set</span> <span class="tok tok-ident" data-scol="17" data-ecol="18">c</span><span class="tok tok-punct" data-scol="18" data-ecol="19">.</span><span class="tok tok-ident" data-scol="19" data-ecol="23">list</span><span class="tok tok-punct" data-scol="23" data-ecol="24">[</span><span class="tok tok-num" data-scol="24" data-ecol="25">1</span><span class="tok tok-punct" data-scol="25" data-ecol="26">]</span> <span class="tok tok-punct" data-scol="27" data-ecol="28">=</span> <span class="tok tok-ident" data-scol="29" data-ecol="30">c</span><span class="tok tok-punct" data-scol="30" data-ecol="31">.</span><span class="tok tok-ident" data-scol="31" data-ecol="35">list</span><span class="tok tok-punct" data-scol="35" data-ecol="36">[</span><span class="tok tok-num" data-scol="36" data-ecol="37">0</span><span class="tok tok-punct" data-scol="37" data-ecol="38">]</span> <span class="tok tok-punct" data-scol="39" data-ecol="40">+</span> <span class="tok tok-num" data-scol="41" data-ecol="42">2</span></span></div>
+<div class="line" id="L37"><span class="ln">37</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="16">set</span> <span class="tok tok-kw" data-scol="17" data-ecol="25">thistype</span><span class="tok tok-punct" data-scol="25" data-ecol="26">.</span><span class="tok tok-ident" data-scol="26" data-ecol="30">made</span> <span class="tok tok-punct" data-scol="31" data-ecol="32">=</span> <span class="tok tok-kw" data-scol="33" data-ecol="41">thistype</span><span class="tok tok-punct" data-scol="41" data-ecol="42">.</span><span class="tok tok-ident" data-scol="42" data-ecol="46">made</span> <span class="tok tok-punct" data-scol="47" data-ecol="48">+</span> <span class="tok tok-num" data-scol="49" data-ecol="50">1</span></span></div>
+<div class="line" id="L38"><span class="ln">38</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="16">set</span> <span class="tok tok-punct" data-scol="17" data-ecol="18">.</span><span class="tok tok-ident" data-scol="18" data-ecol="20">id</span> <span class="tok tok-punct" data-scol="21" data-ecol="22">=</span> <span class="tok tok-kw" data-scol="23" data-ecol="31">thistype</span><span class="tok tok-punct" data-scol="31" data-ecol="32">.</span><span class="tok tok-ident" data-scol="32" data-ecol="36">made</span></span></div>
+<div class="line" id="L39"><span class="ln">39</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="19">return</span> <span class="tok tok-ident" data-scol="20" data-ecol="21">c</span></span></div>
+<div class="line" id="L40"><span class="ln">40</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="18">endmethod</span></span></div>
+<div class="line" id="L41"><span class="ln">41</span><span class="code"></span></div>
+<div class="line" id="L42"><span class="ln">42</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="15">method</span> <span class="tok tok-ident" data-scol="16" data-ecol="20">area</span> <span class="tok tok-kw" data-scol="21" data-ecol="26">takes</span> <span class="tok tok-kw" data-scol="27" data-ecol="34">nothing</span> <span class="tok tok-kw" data-scol="35" data-ecol="42">returns</span> <span class="tok tok-ident" data-scol="43" data-ecol="47">real</span></span></div>
+<div class="line" id="L43"><span class="ln">43</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="19">return</span> <span class="tok tok-kw" data-scol="20" data-ecol="24">this</span><span class="tok tok-punct" data-scol="24" data-ecol="25">.</span><span class="tok tok-ident" data-scol="25" data-ecol="30">value</span> <span class="tok tok-punct" data-scol="31" data-ecol="32">*</span> <span class="tok tok-num" data-scol="33" data-ecol="35">2.</span></span></div>
+<div class="line" id="L44"><span class="ln">44</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="18">endmethod</span></span></div>
+<div class="line" id="L45"><span class="ln">45</span><span class="code"></span></div>
+<div class="line" id="L46"><span class="ln">46</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="15">method</span> <span class="tok tok-kw" data-scol="16" data-ecol="24">operator</span> <span class="tok tok-punct" data-scol="25" data-ecol="26">[</span><span class="tok tok-punct" data-scol="26" data-ecol="27">]</span> <span class="tok tok-kw" data-scol="28" data-ecol="33">takes</span> <span class="tok tok-ident" data-scol="34" data-ecol="41">integer</span> <span class="tok tok-ident" data-scol="42" data-ecol="43">i</span> <span class="tok tok-kw" data-scol="44" data-ecol="51">returns</span> <span class="tok tok-ident" data-scol="52" data-ecol="59">integer</span></span></div>
+<div class="line" id="L47"><span class="ln">47</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="19">return</span> <span class="tok tok-punct" data-scol="20" data-ecol="21">.</span><span class="tok tok-ident" data-scol="21" data-ecol="25">list</span><span class="tok tok-punct" data-scol="25" data-ecol="26">[</span><span class="tok tok-ident" data-scol="26" data-ecol="27">i</span><span class="tok tok-punct" data-scol="27" data-ecol="28">]</span></span></div>
+<div class="line" id="L48"><span class="ln">48</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="18">endmethod</span></span></div>
+<div class="line" id="L49"><span class="ln">49</span><span class="code"></span></div>
+<div class="line" id="L50"><span class="ln">50</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="15">method</span> <span class="tok tok-kw" data-scol="16" data-ecol="24">operator</span> <span class="tok tok-ident" data-scol="25" data-ecol="26">x</span><span class="tok tok-punct" data-scol="26" data-ecol="27">=</span> <span class="tok tok-kw" data-scol="28" data-ecol="33">takes</span> <span class="tok tok-ident" data-scol="34" data-ecol="41">integer</span> <span class="tok tok-ident" data-scol="42" data-ecol="43">v</span> <span class="tok tok-kw" data-scol="44" data-ecol="51">returns</span> <span class="tok tok-kw" data-scol="52" data-ecol="59">nothing</span></span></div>
+<div class="line" id="L51"><span class="ln">51</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="16">set</span> <span class="tok tok-kw" data-scol="17" data-ecol="21">this</span><span class="tok tok-punct" data-scol="21" data-ecol="22">.</span><span class="tok tok-ident" data-scol="22" data-ecol="27">value</span> <span class="tok tok-punct" data-scol="28" data-ecol="29">=</span> <span class="tok tok-ident" data-scol="30" data-ecol="31">v</span></span></div>
+<div class="line" id="L52"><span class="ln">52</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="18">endmethod</span></span></div>
+<div class="line" id="L53"><span class="ln">53</span><span class="code"></span></div>
+<div class="line" id="L54"><span class="ln">54</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="13">stub</span> <span class="tok tok-kw" data-scol="14" data-ecol="20">method</span> <span class="tok tok-ident" data-scol="21" data-ecol="30">onDestroy</span> <span class="tok tok-kw" data-scol="31" data-ecol="36">takes</span> <span class="tok tok-kw" data-scol="37" data-ecol="44">nothing</span> <span class="tok tok-kw" data-scol="45" data-ecol="52">returns</span> <span class="tok tok-kw" data-scol="53" data-ecol="60">nothing</span></span></div>
+<div class="line" id="L55"><span class="ln">55</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="17">call</span> <span class="tok tok-kw" data-scol="18" data-ecol="23">super</span><span class="tok tok-punct" data-scol="23" data-ecol="24">.</span><span class="tok tok-ident" data-scol="24" data-ecol="33">onDestroy</span><span class="tok tok-punct" data-scol="33" data-ecol="34">(</span><span class="tok tok-punct" data-scol="34" data-ecol="35">)</span></span></div>
+<div class="line" id="L56"><span class="ln">56</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="18">endmethod</span></span></div>
+<div class="line" id="L57"><span class="ln">57</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="14">endstruct</span></span></div>
+<div class="line" id="L58"><span class="ln">58</span><span class="code"></span></div>
+<div class="line" id="L59"><span class="ln">59</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="10">scope</span> <span class="tok tok-ident" data-scol="11" data-ecol="16">Inner</span> <span class="tok tok-kw" data-scol="17" data-ecol="28">initializer</span> <span class="tok tok-ident" data-scol="29" data-ecol="34">Start</span></span></div>
+<div class="line" id="L60"><span class="ln">60</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="16">private</span> <span class="tok tok-kw" data-scol="17" data-ecol="25">function</span> <span class="tok tok-ident" data-scol="26" data-ecol="31">Start</span> <span class="tok tok-kw" data-scol="32" data-ecol="37">takes</span> <span class="tok tok-kw" data-scol="38" data-ecol="45">nothing</span> <span class="tok tok-kw" data-scol="46" data-ecol="53">returns</span> <span class="tok tok-kw" data-scol="54" data-ecol="61">nothing</span></span></div>
+<div class="line" id="L61"><span class="ln">61</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="18">local</span> <span class="tok tok-ident" data-scol="19" data-ecol="26">Counter</span> <span class="tok tok-ident" data-scol="27" data-ecol="28">c</span> <span class="tok tok-punct" data-scol="29" data-ecol="30">=</span> <span class="tok tok-ident" data-scol="31" data-ecol="38">Counter</span><span class="tok tok-punct" data-scol="38" data-ecol="39">.</span><span class="tok tok-ident" data-scol="39" data-ecol="45">create</span><span class="tok tok-punct" data-scol="45" data-ecol="46">(</span><span class="tok tok-num" data-scol="46" data-ecol="47">1</span><span class="tok tok-punct" data-scol="47" data-ecol="48">)</span></span></div>
+<div class="line" id="L62"><span class="ln">62</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="17">call</span> <span class="tok tok-ident" data-scol="18" data-ecol="19">c</span><span class="tok tok-punct" data-scol="19" data-ecol="20">.</span><span class="tok tok-ident" data-scol="20" data-ecol="27">destroy</span><span class="tok tok-punct" data-scol="27" data-ecol="28">(</span><span class="tok tok-punct" data-scol="28" data-ecol="29">)</span></span></div>
+<div class="line" id="L63"><span class="ln">63</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="17">call</span> <span class="tok tok-ident" data-scol="18" data-ecol="28">TimerStart</span><span class="tok tok-punct" data-scol="28" data-ecol="29">(</span><span class="tok tok-ident" data-scol="29" data-ecol="40">CreateTimer</span><span class="tok tok-punct" data-scol="40" data-ecol="41">(</span><span class="tok tok-punct" data-scol="41" data-ecol="42">)</span><span class="tok tok-punct" data-scol="42" data-ecol="43">,</span> <span class="tok tok-num" data-scol="44" data-ecol="46">1.</span><span class="tok tok-punct" data-scol="46" data-ecol="47">,</span> <span class="tok tok-kw" data-scol="48" data-ecol="53">false</span><span class="tok tok-punct" data-scol="53" data-ecol="54">,</span> <span class="tok tok-kw" data-scol="55" data-ecol="63">function</span> <span class="tok tok-ident" data-scol="64" data-ecol="71">Counter</span><span class="tok tok-punct" data-scol="71" data-ecol="72">.</span><span class="tok tok-ident" data-scol="72" data-ecol="76">tick</span><span class="tok tok-punct" data-scol="76" data-ecol="77">)</span></span></div>
+<div class="line" id="L64"><span class="ln">64</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="19">static</span> <span class="tok tok-kw" data-scol="20" data-ecol="22">if</span> <span class="tok tok-ident" data-scol="23" data-ecol="41">LIBRARY_TimerUtils</span> <span class="tok tok-kw" data-scol="42" data-ecol="46">then</span></span></div>
+<div class="line" id="L65"><span class="ln">65</span><span class="code">                <span class="tok tok-kw" data-scol="17" data-ecol="21">call</span> <span class="tok tok-ident" data-scol="22" data-ecol="30">Callback</span><span class="tok tok-punct" data-scol="30" data-ecol="31">.</span><span class="tok tok-ident" data-scol="31" data-ecol="39">evaluate</span><span class="tok tok-punct" data-scol="39" data-ecol="40">(</span><span class="tok tok-ident" data-scol="40" data-ecol="41">c</span><span class="tok tok-punct" data-scol="41" data-ecol="42">.</span><span class="tok tok-ident" data-scol="42" data-ecol="46">area</span><span class="tok tok-punct" data-scol="46" data-ecol="47">(</span><span class="tok tok-punct" data-scol="47" data-ecol="48">)</span><span class="tok tok-punct" data-scol="48" data-ecol="49">)</span></span></div>
+<div class="line" id="L66"><span class="ln">66</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="17">else</span></span></div>
+<div class="line" id="L67"><span class="ln">67</span><span class="code">                <span class="tok tok-kw" data-scol="17" data-ecol="20">set</span> <span class="tok tok-ident" data-scol="21" data-ecol="26">count</span> <span class="tok tok-punct" data-scol="27" data-ecol="28">=</span> <span class="tok tok-ident" data-scol="29" data-ecol="41">Counters_MAX</span></span></div>
+<div class="line" id="L68"><span class="ln">68</span><span class="code">            <span class="tok tok-kw" data-scol="13" data-ecol="18">endif</span></span></div>
+<div class="line" id="L69"><span class="ln">69</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="20">endfunction</span></span></div>
+<div class="line" id="L70"><span class="ln">70</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="13">endscope</span></span></div>
+<div class="line" id="L71"><span class="ln">71</span><span class="code"></span></div>
+<div class="line" id="L72"><span class="ln">72</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="12">private</span> <span class="tok tok-kw" data-scol="13" data-ecol="21">function</span> <span class="tok tok-ident" data-scol="22" data-ecol="26">Init</span> <span class="tok tok-kw" data-scol="27" data-ecol="32">takes</span> <span class="tok tok-kw" data-scol="33" data-ecol="40">nothing</span> <span class="tok tok-kw" data-scol="41" data-ecol="48">returns</span> <span class="tok tok-kw" data-scol="49" data-ecol="56">nothing</span></span></div>
+<div class="line" id="L73"><span class="ln">73</span><span class="code">        <span class="tok tok-kw" data-scol="9" data-ecol="12">set</span> <span class="tok tok-ident" data-scol="13" data-ecol="18">count</span> <span class="tok tok-punct" data-scol="19" data-ecol="20">=</span> <span class="tok tok-ident" data-scol="21" data-ecol="28">Counter</span><span class="tok tok-punct" data-scol="28" data-ecol="29">(</span><span class="tok tok-num" data-scol="29" data-ecol="30">5</span><span class="tok tok-punct" data-scol="30" data-ecol="31">)</span><span class="tok tok-punct" data-scol="31" data-ecol="32">.</span><span class="tok tok-ident" data-scol="32" data-ecol="37">value</span></span></div>
+<div class="line" id="L74"><span class="ln">74</span><span class="code">    <span class="tok tok-kw" data-scol="5" data-ecol="16">endfunction</span></span></div>
+<div class="line" id="L75"><span class="ln">75</span><span class="code"><span class="tok tok-kw" data-scol="1" data-ecol="11">endlibrary</span></span></div>
+</pre>
+    <div id="tree" class="tree"></div>
+  </div>
+  <script id="ast-data" type="application/json">{"label":"Program","kind":"root","line":null,"eline":null,"scol":null,"ecol":null,"children":[{"label":"Library Counters initializer Init requires Utils, optional TimerUtils (lines 2-75)","kind":"container","line":2,"eline":75,"scol":1,"ecol":1,"children":[{"label":"Globals","kind":"container","line":null,"eline":null,"scol":null,"ecol":null,"children":[{"label":"private integer count (line 4)","kind":"decl","line":4,"eline":4,"scol":null,"ecol":null,"children":[{"label":"Int 0","kind":"lit","line":4,"eline":4,"scol":33,"ecol":34,"children":[]}]},{"label":"public constant integer MAX (line 5)","kind":"decl","line":5,"eline":5,"scol":null,"ecol":null,"children":[{"label":"Int 8","kind":"lit","line":5,"eline":5,"scol":39,"ecol":40,"children":[]}]},{"label":"integer array sized (line 6)","kind":"decl","line":6,"eline":6,"scol":null,"ecol":null,"children":[{"label":"Size","kind":"container","line":6,"eline":6,"scol":29,"ecol":32,"children":[{"label":"Int 100","kind":"lit","line":6,"eline":6,"scol":29,"ecol":32,"children":[]}]}]}]},{"label":"private Keyword Ahead (line 9)","kind":"decl","line":9,"eline":9,"scol":null,"ecol":null,"children":[]},{"label":"FunctionInterface Callback(integer x) -> nothing (line 10)","kind":"sig","line":10,"eline":10,"scol":null,"ecol":null,"children":[]},{"label":"Type IntList extends integer array (line 11)","kind":"decl","line":11,"eline":11,"scol":null,"ecol":null,"children":[{"label":"Int 16","kind":"lit","line":11,"eline":11,"scol":41,"ecol":43,"children":[]}]},{"label":"Interface Shape (lines 13-16)","kind":"container","line":13,"eline":16,"scol":1,"ecol":1,"children":[{"label":"Method area(nothing) -> real (line 14)","kind":"sig","line":14,"eline":14,"scol":null,"ecol":null,"children":[]},{"label":"Method name(nothing) -> string (line 15)","kind":"sig","line":15,"eline":15,"scol":null,"ecol":null,"children":[{"label":"Defaults","kind":"container","line":15,"eline":15,"scol":59,"ecol":66,"children":[{"label":"String \"shape\"","kind":"lit","line":15,"eline":15,"scol":59,"ecol":66,"children":[]}]}]}]},{"label":"Module Pooled (lines 18-22)","kind":"container","line":18,"eline":22,"scol":1,"ecol":1,"children":[{"label":"static Method get(nothing) -> thistype (line 19)","kind":"sig","line":19,"eline":19,"scol":null,"ecol":null,"children":[{"label":"Return (line 20)","kind":"stmt","line":20,"eline":20,"scol":null,"ecol":null,"children":[{"label":"MethodCall allocate","kind":"expr","line":20,"eline":20,"scol":20,"ecol":39,"children":[{"label":"ThisType","kind":"expr","line":20,"eline":20,"scol":20,"ecol":28,"children":[]}]}]}]}]},{"label":"Struct Counter extends Shape (lines 24-57)","kind":"container","line":24,"eline":57,"scol":1,"ecol":1,"children":[{"label":"Size","kind":"container","line":24,"eline":24,"scol":20,"ecol":25,"children":[{"label":"Int 20000","kind":"lit","line":24,"eline":24,"scol":20,"ecol":25,"children":[]}]},{"label":"integer value (line 25)","kind":"decl","line":25,"eline":25,"scol":null,"ecol":null,"children":[]},{"label":"static integer made (line 26)","kind":"decl","line":26,"eline":26,"scol":null,"ecol":null,"children":[{"label":"Int 0","kind":"lit","line":26,"eline":26,"scol":31,"ecol":32,"children":[]}]},{"label":"private real ratio (line 27)","kind":"decl","line":27,"eline":27,"scol":null,"ecol":null,"children":[]},{"label":"readonly integer id (line 28)","kind":"decl","line":28,"eline":28,"scol":null,"ecol":null,"children":[]},{"label":"integer array list (line 29)","kind":"decl","line":29,"eline":29,"scol":null,"ecol":null,"children":[{"label":"Size","kind":"container","line":29,"eline":29,"scol":28,"ecol":29,"children":[{"label":"Int 4","kind":"lit","line":29,"eline":29,"scol":28,"ecol":29,"children":[]}]}]},{"label":"Implement Pooled (line 30)","kind":"decl","line":30,"eline":30,"scol":null,"ecol":null,"children":[]},{"label":"Implement optional Extra (line 31)","kind":"decl","line":31,"eline":31,"scol":null,"ecol":null,"children":[]},{"label":"static Method create(integer v) -> thistype (line 33)","kind":"sig","line":33,"eline":33,"scol":null,"ecol":null,"children":[{"label":"Local thistype c (line 34)","kind":"stmt","line":34,"eline":34,"scol":null,"ecol":null,"children":[{"label":"MethodCall allocate","kind":"expr","line":34,"eline":34,"scol":32,"ecol":51,"children":[{"label":"ThisType","kind":"expr","line":34,"eline":34,"scol":32,"ecol":40,"children":[]}]}]},{"label":"SetMember (line 35)","kind":"stmt","line":35,"eline":35,"scol":null,"ecol":null,"children":[{"label":"Target","kind":"container","line":35,"eline":35,"scol":17,"ecol":24,"children":[{"label":"Member value","kind":"expr","line":35,"eline":35,"scol":17,"ecol":24,"children":[{"label":"Var c","kind":"expr","line":35,"eline":35,"scol":17,"ecol":18,"children":[]}]}]},{"label":"Value","kind":"container","line":35,"eline":35,"scol":27,"ecol":28,"children":[{"label":"Var v","kind":"expr","line":35,"eline":35,"scol":27,"ecol":28,"children":[]}]}]},{"label":"SetMember (line 36)","kind":"stmt","line":36,"eline":36,"scol":null,"ecol":null,"children":[{"label":"Target","kind":"container","line":36,"eline":36,"scol":17,"ecol":23,"children":[{"label":"Member list","kind":"expr","line":36,"eline":36,"scol":17,"ecol":23,"children":[{"label":"Var c","kind":"expr","line":36,"eline":36,"scol":17,"ecol":18,"children":[]}]}]},{"label":"Index","kind":"container","line":36,"eline":36,"scol":24,"ecol":25,"children":[{"label":"Int 1","kind":"lit","line":36,"eline":36,"scol":24,"ecol":25,"children":[]}]},{"label":"Value","kind":"container","line":36,"eline":36,"scol":29,"ecol":42,"children":[{"label":"Binary Add","kind":"expr","line":36,"eline":36,"scol":29,"ecol":42,"children":[{"label":"Index","kind":"expr","line":36,"eline":36,"scol":29,"ecol":38,"children":[{"label":"Member list","kind":"expr","line":36,"eline":36,"scol":29,"ecol":35,"children":[{"label":"Var c","kind":"expr","line":36,"eline":36,"scol":29,"ecol":30,"children":[]}]},{"label":"Int 0","kind":"lit","line":36,"eline":36,"scol":36,"ecol":37,"children":[]}]},{"label":"Int 2","kind":"lit","line":36,"eline":36,"scol":41,"ecol":42,"children":[]}]}]}]},{"label":"SetMember (line 37)","kind":"stmt","line":37,"eline":37,"scol":null,"ecol":null,"children":[{"label":"Target","kind":"container","line":37,"eline":37,"scol":17,"ecol":30,"children":[{"label":"Member made","kind":"expr","line":37,"eline":37,"scol":17,"ecol":30,"children":[{"label":"ThisType","kind":"expr","line":37,"eline":37,"scol":17,"ecol":25,"children":[]}]}]},{"label":"Value","kind":"container","line":37,"eline":37,"scol":33,"ecol":50,"children":[{"label":"Binary Add","kind":"expr","line":37,"eline":37,"scol":33,"ecol":50,"children":[{"label":"Member made","kind":"expr","line":37,"eline":37,"scol":33,"ecol":46,"children":[{"label":"ThisType","kind":"expr","line":37,"eline":37,"scol":33,"ecol":41,"children":[]}]},{"label":"Int 1","kind":"lit","line":37,"eline":37,"scol":49,"ecol":50,"children":[]}]}]}]},{"label":"SetMember (line 38)","kind":"stmt","line":38,"eline":38,"scol":null,"ecol":null,"children":[{"label":"Target","kind":"container","line":38,"eline":38,"scol":17,"ecol":20,"children":[{"label":"Member id","kind":"expr","line":38,"eline":38,"scol":17,"ecol":20,"children":[{"label":"This","kind":"expr","line":38,"eline":38,"scol":17,"ecol":17,"children":[]}]}]},{"label":"Value","kind":"container","line":38,"eline":38,"scol":23,"ecol":36,"children":[{"label":"Member made","kind":"expr","line":38,"eline":38,"scol":23,"ecol":36,"children":[{"label":"ThisType","kind":"expr","line":38,"eline":38,"scol":23,"ecol":31,"children":[]}]}]}]},{"label":"Return (line 39)","kind":"stmt","line":39,"eline":39,"scol":null,"ecol":null,"children":[{"label":"Var c","kind":"expr","line":39,"eline":39,"scol":20,"ecol":21,"children":[]}]}]},{"label":"Method area(nothing) -> real (line 42)","kind":"sig","line":42,"eline":42,"scol":null,"ecol":null,"children":[{"label":"Return (line 43)","kind":"stmt","line":43,"eline":43,"scol":null,"ecol":null,"children":[{"label":"Binary Mul","kind":"expr","line":43,"eline":43,"scol":20,"ecol":35,"children":[{"label":"Member value","kind":"expr","line":43,"eline":43,"scol":20,"ecol":30,"children":[{"label":"This","kind":"expr","line":43,"eline":43,"scol":20,"ecol":24,"children":[]}]},{"label":"Real 2","kind":"lit","line":43,"eline":43,"scol":33,"ecol":35,"children":[]}]}]}]},{"label":"Method operator [](integer i) -> integer (line 46)","kind":"sig","line":46,"eline":46,"scol":null,"ecol":null,"children":[{"label":"Return (line 47)","kind":"stmt","line":47,"eline":47,"scol":null,"ecol":null,"children":[{"label":"Index","kind":"expr","line":47,"eline":47,"scol":20,"ecol":28,"children":[{"label":"Member list","kind":"expr","line":47,"eline":47,"scol":20,"ecol":25,"children":[{"label":"This","kind":"expr","line":47,"eline":47,"scol":20,"ecol":20,"children":[]}]},{"label":"Var i","kind":"expr","line":47,"eline":47,"scol":26,"ecol":27,"children":[]}]}]}]},{"label":"Method operator x=(integer v) -> nothing (line 50)","kind":"sig","line":50,"eline":50,"scol":null,"ecol":null,"children":[{"label":"SetMember (line 51)","kind":"stmt","line":51,"eline":51,"scol":null,"ecol":null,"children":[{"label":"Target","kind":"container","line":51,"eline":51,"scol":17,"ecol":27,"children":[{"label":"Member value","kind":"expr","line":51,"eline":51,"scol":17,"ecol":27,"children":[{"label":"This","kind":"expr","line":51,"eline":51,"scol":17,"ecol":21,"children":[]}]}]},{"label":"Value","kind":"container","line":51,"eline":51,"scol":30,"ecol":31,"children":[{"label":"Var v","kind":"expr","line":51,"eline":51,"scol":30,"ecol":31,"children":[]}]}]}]},{"label":"stub Method onDestroy(nothing) -> nothing (line 54)","kind":"sig","line":54,"eline":54,"scol":null,"ecol":null,"children":[{"label":"CallMethod (line 55)","kind":"stmt","line":55,"eline":55,"scol":null,"ecol":null,"children":[{"label":"MethodCall onDestroy","kind":"expr","line":55,"eline":55,"scol":18,"ecol":35,"children":[{"label":"Super","kind":"expr","line":55,"eline":55,"scol":18,"ecol":23,"children":[]}]}]}]}]},{"label":"Scope Inner initializer Start (lines 59-70)","kind":"container","line":59,"eline":70,"scol":1,"ecol":1,"children":[{"label":"private Function Start(nothing) -> nothing (line 60)","kind":"sig","line":60,"eline":60,"scol":null,"ecol":null,"children":[{"label":"Local Counter c (line 61)","kind":"stmt","line":61,"eline":61,"scol":null,"ecol":null,"children":[{"label":"MethodCall create","kind":"expr","line":61,"eline":61,"scol":31,"ecol":48,"children":[{"label":"Var Counter","kind":"expr","line":61,"eline":61,"scol":31,"ecol":38,"children":[]},{"label":"Int 1","kind":"lit","line":61,"eline":61,"scol":46,"ecol":47,"children":[]}]}]},{"label":"CallMethod (line 62)","kind":"stmt","line":62,"eline":62,"scol":null,"ecol":null,"children":[{"label":"MethodCall destroy","kind":"expr","line":62,"eline":62,"scol":18,"ecol":29,"children":[{"label":"Var c","kind":"expr","line":62,"eline":62,"scol":18,"ecol":19,"children":[]}]}]},{"label":"Call TimerStart (line 63)","kind":"stmt","line":63,"eline":63,"scol":null,"ecol":null,"children":[{"label":"Call CreateTimer","kind":"expr","line":63,"eline":63,"scol":29,"ecol":42,"children":[]},{"label":"Real 1","kind":"lit","line":63,"eline":63,"scol":44,"ecol":46,"children":[]},{"label":"Bool false","kind":"lit","line":63,"eline":63,"scol":48,"ecol":53,"children":[]},{"label":"FuncRef Counter.tick","kind":"expr","line":63,"eline":63,"scol":55,"ecol":76,"children":[]}]},{"label":"StaticIf (line 64)","kind":"stmt","line":64,"eline":64,"scol":null,"ecol":null,"children":[{"label":"Condition","kind":"container","line":64,"eline":64,"scol":23,"ecol":41,"children":[{"label":"Var LIBRARY_TimerUtils","kind":"expr","line":64,"eline":64,"scol":23,"ecol":41,"children":[]}]},{"label":"Then","kind":"container","line":64,"eline":64,"scol":null,"ecol":null,"children":[{"label":"CallMethod (line 65)","kind":"stmt","line":65,"eline":65,"scol":null,"ecol":null,"children":[{"label":"MethodCall evaluate","kind":"expr","line":65,"eline":65,"scol":22,"ecol":49,"children":[{"label":"Var Callback","kind":"expr","line":65,"eline":65,"scol":22,"ecol":30,"children":[]},{"label":"MethodCall area","kind":"expr","line":65,"eline":65,"scol":40,"ecol":48,"children":[{"label":"Var c","kind":"expr","line":65,"eline":65,"scol":40,"ecol":41,"children":[]}]}]}]}]},{"label":"Else","kind":"container","line":64,"eline":64,"scol":null,"ecol":null,"children":[{"label":"Set count (line 67)","kind":"stmt","line":67,"eline":67,"scol":null,"ecol":null,"children":[{"label":"Value","kind":"container","line":67,"eline":67,"scol":null,"ecol":null,"children":[{"label":"Var Counters_MAX","kind":"expr","line":67,"eline":67,"scol":29,"ecol":41,"children":[]}]}]}]}]}]}]},{"label":"private Function Init(nothing) -> nothing (line 72)","kind":"sig","line":72,"eline":72,"scol":null,"ecol":null,"children":[{"label":"Set count (line 73)","kind":"stmt","line":73,"eline":73,"scol":null,"ecol":null,"children":[{"label":"Value","kind":"container","line":73,"eline":73,"scol":null,"ecol":null,"children":[{"label":"Member value","kind":"expr","line":73,"eline":73,"scol":21,"ecol":37,"children":[{"label":"Call Counter","kind":"expr","line":73,"eline":73,"scol":21,"ecol":31,"children":[{"label":"Int 5","kind":"lit","line":73,"eline":73,"scol":29,"ecol":30,"children":[]}]}]}]}]}]}]}]}</script>
+  <script>
+  (function () {
+    "use strict";
+    var data = JSON.parse(document.getElementById("ast-data").textContent);
+    var treeEl = document.getElementById("tree");
+    var sourceEl = document.getElementById("source");
+
+    function countNodes(n) {
+      var total = 1;
+      for (var i = 0; i < n.children.length; i++) total += countNodes(n.children[i]);
+      return total;
+    }
+    document.getElementById("nodeCount").textContent = countNodes(data) + " nodes";
+
+    // ---- tree <- source: build DOM rows, remember node -> row on the node
+    // itself (plain object identity is stable for the page's lifetime) ----
+
+    function build(node, depth) {
+      var row = document.createElement("div");
+      row.className = "node kind-" + node.kind;
+      row.style.setProperty("--depth", depth);
+      var hasChildren = node.children && node.children.length > 0;
+      row.setAttribute("data-has-children", hasChildren ? "true" : "false");
+      node.__el = row;
+
+      var head = document.createElement("div");
+      head.className = "node-head";
+
+      var toggle = document.createElement("span");
+      toggle.className = "toggle";
+      toggle.textContent = "▾";
+      head.appendChild(toggle);
+
+      var label = document.createElement("span");
+      label.className = "label";
+      label.textContent = node.label;
+      head.appendChild(label);
+
+      if (node.line !== null) {
+        var lineTag = document.createElement("span");
+        lineTag.className = "linetag";
+        lineTag.textContent = node.eline && node.eline !== node.line
+          ? "L" + node.line + "-" + node.eline
+          : "L" + node.line;
+        head.appendChild(lineTag);
+      }
+
+      row.appendChild(head);
+
+      head.addEventListener("click", function (e) {
+        if (e.target === toggle && hasChildren) {
+          row.classList.toggle("collapsed");
+          toggle.textContent = row.classList.contains("collapsed") ? "▸" : "▾";
+          return;
+        }
+        pickTreeNode(node);
+        highlightSpan(node);
+      });
+
+      if (hasChildren) {
+        var kids = document.createElement("div");
+        kids.className = "children";
+        for (var i = 0; i < node.children.length; i++) {
+          kids.appendChild(build(node.children[i], depth + 1));
+        }
+        row.appendChild(kids);
+      }
+
+      return row;
+    }
+
+    treeEl.appendChild(build(data, 0));
+
+    function clearTreePick() {
+      document.querySelectorAll(".node.picked").forEach(function (n) {
+        n.classList.remove("picked");
+      });
+    }
+
+    function pickTreeNode(node) {
+      clearTreePick();
+      if (!node || !node.__el) return;
+      node.__el.classList.add("picked");
+      var p = node.__el.parentElement;
+      while (p) {
+        if (p.classList && p.classList.contains("node")) {
+          p.classList.remove("collapsed");
+          var t = p.querySelector(":scope > .node-head > .toggle");
+          if (t) t.textContent = "▾";
+        }
+        p = p.parentElement;
+      }
+      node.__el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+
+    // ---- source highlighting: whole line (coarse, for statements) plus
+    // exact token-range selection (precise, for expressions) ----
+
+    function clearSourceHighlight() {
+      document.querySelectorAll(".line.active").forEach(function (el) {
+        el.classList.remove("active");
+      });
+      document.querySelectorAll(".tok.selected").forEach(function (el) {
+        el.classList.remove("selected");
+      });
+    }
+
+    function highlightSpan(node) {
+      clearSourceHighlight();
+      if (node.line === null) return;
+      var eline = node.eline === null ? node.line : node.eline;
+      for (var ln = node.line; ln <= eline; ln++) {
+        var lineEl = document.getElementById("L" + ln);
+        if (lineEl) lineEl.classList.add("active");
+      }
+      if (node.scol !== null && node.line === eline) {
+        var lineEl2 = document.getElementById("L" + node.line);
+        if (lineEl2) {
+          lineEl2.querySelectorAll(".tok").forEach(function (tok) {
+            var s = parseInt(tok.getAttribute("data-scol"), 10);
+            var e = parseInt(tok.getAttribute("data-ecol"), 10);
+            if (s >= node.scol && e <= node.ecol) tok.classList.add("selected");
+          });
+        }
+      }
+      var primary = document.getElementById("L" + node.line);
+      if (primary) primary.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+
+    // ---- tree <- source: map a clicked/selected source token back to the
+    // deepest AST node whose span contains it ----
+
+    function tokenPosition(node) {
+      var el = node.nodeType === 1 ? node : node.parentElement;
+      var tok = el ? el.closest(".tok") : null;
+      if (!tok) return null;
+      var lineEl = tok.closest(".line");
+      if (!lineEl) return null;
+      return {
+        line: parseInt(lineEl.id.slice(1), 10),
+        scol: parseInt(tok.getAttribute("data-scol"), 10),
+        ecol: parseInt(tok.getAttribute("data-ecol"), 10),
+      };
+    }
+
+    function containsQuery(node, line, scol, ecol) {
+      if (node.line === null) return false;
+      var eline = node.eline === null ? node.line : node.eline;
+      if (node.scol === null) return line >= node.line && line <= eline;
+      if (node.line !== line || eline !== line) return false;
+      return node.scol <= scol && ecol <= node.ecol;
+    }
+
+    function findDeepest(node, line, scol, ecol) {
+      // Recurse into children first, even if `node` itself has no span
+      // (e.g. the Program root, or a pseudo-grouping node like "Then") —
+      // otherwise a spanless ancestor would block the search from ever
+      // reaching the real, spanned descendants underneath it.
+      for (var i = 0; i < node.children.length; i++) {
+        var hit = findDeepest(node.children[i], line, scol, ecol);
+        if (hit) return hit;
+      }
+      return containsQuery(node, line, scol, ecol) ? node : null;
+    }
+
+    sourceEl.addEventListener("mouseup", function () {
+      var sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || !sel.anchorNode) return;
+      if (!sourceEl.contains(sel.anchorNode)) return;
+
+      var from = tokenPosition(sel.anchorNode);
+      if (!from) return;
+      var to = tokenPosition(sel.focusNode) || from;
+      if (to.line < from.line || (to.line === from.line && to.ecol < from.scol)) {
+        var tmp = from;
+        from = to;
+        to = tmp;
+      }
+      if (from.line !== to.line) return; // multi-line selections: not supported yet
+
+      var hit = findDeepest(data, from.line, from.scol, to.ecol);
+      if (hit) {
+        pickTreeNode(hit);
+        highlightSpan(hit);
+      }
+    });
+
+    // ---- toolbar controls ----
+
+    document.getElementById("expandAll").addEventListener("click", function () {
+      document.querySelectorAll(".node.collapsed").forEach(function (n) {
+        n.classList.remove("collapsed");
+        var t = n.querySelector(":scope > .node-head > .toggle");
+        if (t) t.textContent = "▾";
+      });
+    });
+
+    document.getElementById("collapseAll").addEventListener("click", function () {
+      document.querySelectorAll('.node[data-has-children="true"]').forEach(function (n) {
+        n.classList.add("collapsed");
+        var t = n.querySelector(":scope > .node-head > .toggle");
+        if (t) t.textContent = "▸";
+      });
+    });
+
+    document.getElementById("filter").addEventListener("input", function (e) {
+      var q = e.target.value.trim().toLowerCase();
+      document.querySelectorAll(".node.match").forEach(function (n) {
+        n.classList.remove("match");
+      });
+      if (!q) return;
+      document.querySelectorAll(".node").forEach(function (n) {
+        var label = n.querySelector(":scope > .node-head > .label");
+        if (label && label.textContent.toLowerCase().indexOf(q) !== -1) {
+          n.classList.add("match");
+          var p = n.parentElement;
+          while (p) {
+            if (p.classList && p.classList.contains("node")) {
+              p.classList.remove("collapsed");
+              var t = p.querySelector(":scope > .node-head > .toggle");
+              if (t) t.textContent = "▾";
+            }
+            p = p.parentElement;
+          }
+        }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

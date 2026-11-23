@@ -380,3 +380,124 @@ fn local_may_be_left_out() {
     let err = Parser::parse_str("function F\n    debug integer i\nendfunction").unwrap_err();
     assert!(err.message.contains("'debug' can only precede"), "{}", err.message);
 }
+
+fn vjass(src: &str) -> Program {
+    Parser::parse_str_with(src, Dialect::VJass).unwrap_or_else(|e| panic!("line {}: {}", e.line, e.message))
+}
+
+#[test]
+fn vjass_libraries_structs_and_members() {
+    let prog = vjass(include_str!("../tests/fixtures/vjass.j"));
+    let TopLevel::Library(lib) = &prog.items[0] else { panic!("{:?}", prog.items[0]) };
+    assert_eq!((lib.name.as_str(), lib.scope, lib.initializer.as_deref()), ("Counters", false, Some("Init")));
+    assert_eq!(lib.requires, vec![("Utils".to_string(), false), ("TimerUtils".to_string(), true)]);
+    assert_eq!((lib.line, lib.end_line), (2, 75));
+
+    let TopLevel::Globals(g) = &lib.items[0] else { panic!() };
+    let globals: Vec<(&str, Access, bool, bool)> = g.iter().map(|d| (d.name.as_str(), d.modifiers.access, d.is_constant, d.size.is_some())).collect();
+    assert_eq!(globals, [("count", Access::Private, false, false), ("MAX", Access::Public, true, false), ("sized", Access::Default, false, true)]);
+    assert!(matches!(&lib.items[1], TopLevel::Keyword { name, modifiers, .. } if name == "Ahead" && modifiers.access == Access::Private));
+    assert!(matches!(&lib.items[2], TopLevel::FunctionInterface(sig) if sig.name == "Callback" && sig.params.len() == 1));
+    assert!(matches!(&lib.items[3], TopLevel::TypeDef { name, size: Some(_), .. } if name == "IntList"));
+
+    let TopLevel::Interface(shape) = &lib.items[4] else { panic!() };
+    let methods: Vec<(&str, bool, bool)> = shape
+        .members
+        .iter()
+        .map(|m| match m {
+            StructMember::Method(md) => (md.sig.name.as_str(), md.body.is_some(), md.defaults.is_some()),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(methods, [("area", false, false), ("name", false, true)]);
+    let TopLevel::Module(pooled) = &lib.items[5] else { panic!() };
+    assert!(matches!(&pooled.members[0], StructMember::Method(md) if md.sig.modifiers.is_static && md.body.is_some()));
+
+    let TopLevel::Struct(st) = &lib.items[6] else { panic!() };
+    assert_eq!((st.name.as_str(), st.extends.as_deref(), st.size.is_some()), ("Counter", Some("Shape"), true));
+    let fields: Vec<(&str, bool, Access, bool, bool)> = st
+        .members
+        .iter()
+        .filter_map(|m| match m {
+            StructMember::Field(d) => Some((d.name.as_str(), d.modifiers.is_static, d.modifiers.access, d.modifiers.is_readonly, d.is_array)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        fields,
+        [("value", false, Access::Default, false, false), ("made", true, Access::Default, false, false), ("ratio", false, Access::Private, false, false), ("id", false, Access::Default, true, false), ("list", false, Access::Default, false, true)]
+    );
+    let implements: Vec<(&str, bool)> = st
+        .members
+        .iter()
+        .filter_map(|m| match m {
+            StructMember::Implement { name, optional, .. } => Some((name.as_str(), *optional)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(implements, [("Pooled", false), ("Extra", true)]);
+    let methods: Vec<&MethodDecl> = st
+        .members
+        .iter()
+        .filter_map(|m| match m {
+            StructMember::Method(md) => Some(md),
+            _ => None,
+        })
+        .collect();
+    let names: Vec<&str> = methods.iter().map(|m| m.sig.name.as_str()).collect();
+    assert_eq!(names, ["create", "area", "operator []", "operator x=", "onDestroy"]);
+    assert!(methods[4].sig.modifiers.is_stub);
+
+    let v = |n: &str| Expr::dummy(ExprKind::Var(n.into()));
+    let member = |o: Expr, n: &str| Expr::dummy(ExprKind::Member(Box::new(o), n.into()));
+    let int = |i: i64| Expr::dummy(ExprKind::IntLiteral(i));
+    let this_type = || Expr::dummy(ExprKind::ThisType);
+    let create = methods[0].body.as_ref().unwrap();
+    assert_eq!(
+        create[0],
+        Stmt::Local {
+            type_name: "thistype".into(),
+            is_array: false,
+            name: "c".into(),
+            initializer: Some(Expr::dummy(ExprKind::MethodCall(Box::new(this_type()), "allocate".into(), vec![]))),
+            line: 34,
+            keyword: true
+        }
+    );
+    assert_eq!(create[1], Stmt::SetMember { target: member(v("c"), "value"), index: None, value: v("v"), line: 35, keyword: true });
+    let list_0 = Expr::dummy(ExprKind::Index(Box::new(member(v("c"), "list")), Box::new(int(0))));
+    assert_eq!(
+        create[2],
+        Stmt::SetMember {
+            target: member(v("c"), "list"),
+            index: Some(int(1)),
+            value: Expr::dummy(ExprKind::Binary(Box::new(list_0), BinOp::Add, Box::new(int(2)))),
+            line: 36,
+            keyword: true
+        }
+    );
+    // `.id`: `this` written nowhere.
+    let this = || Expr::dummy(ExprKind::This);
+    assert_eq!(create[4], Stmt::SetMember { target: member(this(), "id"), index: None, value: member(this_type(), "made"), line: 38, keyword: true });
+    let destroy = methods[4].body.as_ref().unwrap();
+    assert!(matches!(&destroy[0], Stmt::CallMethod { call, .. } if matches!(&call.kind, ExprKind::MethodCall(o, n, _) if o.kind == ExprKind::Super && n == "onDestroy")));
+
+    let TopLevel::Library(inner) = &lib.items[7] else { panic!() };
+    assert!(inner.scope && inner.initializer.as_deref() == Some("Start"));
+    let TopLevel::Function(start) = &inner.items[0] else { panic!() };
+    assert_eq!(start.sig.modifiers.access, Access::Private);
+    assert!(matches!(&start.body[1], Stmt::CallMethod { call, .. } if matches!(&call.kind, ExprKind::MethodCall(o, n, a) if **o == v("c") && n == "destroy" && a.is_empty())));
+    assert!(matches!(&start.body[2], Stmt::Call { args, .. } if args[3].kind == ExprKind::FuncRef("Counter.tick".into())));
+    assert!(matches!(&start.body[3], Stmt::StaticIf { branches, else_branch: Some(_), .. } if branches.len() == 1));
+    let TopLevel::Function(init) = &lib.items[8] else { panic!() };
+    // `Counter(5).value`: a cast's member.
+    assert!(matches!(&init.body[0], Stmt::Set { value, .. } if matches!(&value.kind, ExprKind::Member(o, n) if n == "value" && matches!(&o.kind, ExprKind::Call(c, _) if c == "Counter"))));
+}
+
+#[test]
+fn vjass_words_are_names_in_jass() {
+    // Plain JASS: no members, and vJASS's words are names.
+    let prog = Parser::parse_str("function F takes nothing returns nothing\n    local integer library = 1\n    local integer struct = library\nendfunction").unwrap();
+    assert!(matches!(&prog.items[0], TopLevel::Function(f) if f.body.len() == 2));
+    assert!(Parser::parse_str("function F takes nothing returns nothing\n    call a.b()\nendfunction").is_err());
+}

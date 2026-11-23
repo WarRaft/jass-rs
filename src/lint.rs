@@ -11,22 +11,39 @@ pub fn lint(program: &Program) -> Vec<Diagnostic> {
     check_duplicate_top_level_names(program, &mut diags);
     check_declaration_order(program, &mut diags);
     check_duplicate_global_names(program, &mut diags);
-    for item in &program.items {
+    lint_items(&program.items, &mut diags);
+    diags.sort_by_key(|d| d.line);
+    diags
+}
+
+/// The rules of each function, at the top level, in vJASS's libraries and
+/// scopes and as its structs' and modules' methods.
+fn lint_items(items: &[TopLevel], diags: &mut Vec<Diagnostic>) {
+    for item in items {
         match item {
             TopLevel::Function(f) => {
-                check_signature(&f.sig, "function", &mut diags);
-                check_keywords(&f.body, &mut diags);
-                check_function(f, &mut diags);
+                check_signature(&f.sig, "function", diags);
+                check_keywords(&f.body, diags);
+                check_function(f, diags);
             }
-            TopLevel::Native(sig) => check_signature(sig, "native", &mut diags),
+            TopLevel::Native(sig) => check_signature(sig, "native", diags),
             // Zinc blocks are linted by Zinc's own rules.
             TopLevel::Zinc(block) => diags.extend(zinc_rs::lint(&block.program)),
-            TopLevel::Stmt(s) => diags.push(Diagnostic::error(rule::STATEMENT_OUTSIDE_FUNCTION, top_level_stmt_message(s), stmt_line(s))),
+            TopLevel::Stmt(s) => diags.push(Diagnostic::error(rule::STATEMENT_OUTSIDE_FUNCTION, top_level_stmt_message(s), s.line())),
+            TopLevel::Library(l) => lint_items(&l.items, diags),
+            TopLevel::Struct(StructDecl { members, .. }) | TopLevel::Module(TypeDecl { members, .. }) => {
+                for m in members {
+                    if let StructMember::Method(MethodDecl { sig, body: Some(body), .. }) = m {
+                        let f = FunctionDecl { sig: sig.clone(), body: body.clone() };
+                        check_signature(&f.sig, "method", diags);
+                        check_keywords(&f.body, diags);
+                        check_function(&f, diags);
+                    }
+                }
+            }
             _ => {}
         }
     }
-    diags.sort_by_key(|d| d.line);
-    diags
 }
 
 fn check_duplicate_global_names(program: &Program, diags: &mut Vec<Diagnostic>) {
@@ -70,21 +87,11 @@ fn top_level_stmt_message(s: &Stmt) -> String {
         Stmt::ExitWhen { .. } => "exitwhen",
         Stmt::Return { .. } => "return",
         Stmt::Debug { stmt, .. } => return top_level_stmt_message(stmt),
+        Stmt::SetMember { .. } => "set",
+        Stmt::CallMethod { .. } => "call",
+        Stmt::StaticIf { .. } => "static if",
     };
     format!("'{keyword}' statement outside a function: move it into a function")
-}
-
-fn stmt_line(s: &Stmt) -> usize {
-    match s {
-        Stmt::Local { line, .. }
-        | Stmt::Set { line, .. }
-        | Stmt::Call { line, .. }
-        | Stmt::If { line, .. }
-        | Stmt::Loop { line, .. }
-        | Stmt::ExitWhen { line, .. }
-        | Stmt::Return { line, .. }
-        | Stmt::Debug { line, .. } => *line,
-    }
 }
 
 /// The functions the build merges when there are several, as the game
@@ -158,7 +165,15 @@ fn check_declaration_order(program: &Program, diags: &mut Vec<Diagnostic>) {
             },
             TopLevel::Native(sig) => (format!("native '{}'", sig.name), sig.line),
             TopLevel::TypeDef { name, line, .. } => (format!("type '{name}'"), *line),
-            TopLevel::Stmt(_) | TopLevel::Zinc(_) => continue,
+            // vJASS's are gathered by JassHelper wherever they are.
+            TopLevel::Stmt(_)
+            | TopLevel::Zinc(_)
+            | TopLevel::Library(_)
+            | TopLevel::Struct(_)
+            | TopLevel::Interface(_)
+            | TopLevel::Module(_)
+            | TopLevel::FunctionInterface(_)
+            | TopLevel::Keyword { .. } => continue,
         };
         if let Some(f) = first_function {
             diags.push(Diagnostic::error(
@@ -191,7 +206,17 @@ fn check_keywords(body: &[Stmt], diags: &mut Vec<Diagnostic>) {
                 format!("the local '{name}' leaves out 'local', which the game requires"),
                 *line,
             )),
-            Stmt::If { branches, else_branch, .. } => {
+            Stmt::SetMember { keyword: false, line, .. } => diags.push(Diagnostic::error(
+                rule::IMPLICIT_KEYWORD,
+                "the assignment to a member leaves out 'set', which the game requires",
+                *line,
+            )),
+            Stmt::CallMethod { keyword: false, line, .. } => diags.push(Diagnostic::error(
+                rule::IMPLICIT_KEYWORD,
+                "the call of a method leaves out 'call', which the game requires",
+                *line,
+            )),
+            Stmt::If { branches, else_branch, .. } | Stmt::StaticIf { branches, else_branch, .. } => {
                 for (_, b) in branches {
                     check_keywords(b, diags);
                 }
@@ -279,6 +304,11 @@ fn collect_locals<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Stmt>) {
                 branches,
                 else_branch,
                 ..
+            }
+            | Stmt::StaticIf {
+                branches,
+                else_branch,
+                ..
             } => {
                 for (_, body) in branches {
                     collect_locals(body, out);
@@ -327,6 +357,14 @@ fn check_stmts(stmts: &[Stmt], diags: &mut Vec<Diagnostic>) {
                 }
             }
             Stmt::Debug { stmt, .. } => check_stmts(std::slice::from_ref(stmt), diags),
+            Stmt::StaticIf { branches, else_branch, .. } => {
+                for (_, body) in branches {
+                    check_stmts(body, diags);
+                }
+                if let Some(body) = else_branch {
+                    check_stmts(body, diags);
+                }
+            }
             _ => {}
         }
     }
@@ -351,6 +389,11 @@ fn contains_exitwhen(stmts: &[Stmt]) -> bool {
             branches,
             else_branch,
             ..
+        }
+        | Stmt::StaticIf {
+            branches,
+            else_branch,
+            ..
         } => {
             branches.iter().any(|(_, body)| contains_exitwhen(body))
                 || else_branch
@@ -367,6 +410,11 @@ fn contains_return(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| match s {
         Stmt::Return { .. } => true,
         Stmt::If {
+            branches,
+            else_branch,
+            ..
+        }
+        | Stmt::StaticIf {
             branches,
             else_branch,
             ..
@@ -401,12 +449,20 @@ fn collect_used_vars(e: &Expr, used: &mut HashSet<String>) {
             collect_used_vars(l, used);
             collect_used_vars(r, used);
         }
+        ExprKind::Member(..) | ExprKind::MethodCall(..) | ExprKind::Index(..) => {
+            for c in e.children() {
+                collect_used_vars(c, used);
+            }
+        }
         ExprKind::IntLiteral(_)
         | ExprKind::RealLiteral(_)
         | ExprKind::StringLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
-        | ExprKind::FuncRef(_) => {}
+        | ExprKind::FuncRef(_)
+        | ExprKind::This
+        | ExprKind::ThisType
+        | ExprKind::Super => {}
     }
 }
 
@@ -429,6 +485,11 @@ fn collect_used_vars_stmt(s: &Stmt, used: &mut HashSet<String>) {
             }
         }
         Stmt::If {
+            branches,
+            else_branch,
+            ..
+        }
+        | Stmt::StaticIf {
             branches,
             else_branch,
             ..
@@ -458,6 +519,14 @@ fn collect_used_vars_stmt(s: &Stmt, used: &mut HashSet<String>) {
         }
         // Reading a variable in debug code is still a use.
         Stmt::Debug { stmt, .. } => collect_used_vars_stmt(stmt, used),
+        Stmt::SetMember { target, index, value, .. } => {
+            collect_used_vars(target, used);
+            if let Some(i) = index {
+                collect_used_vars(i, used);
+            }
+            collect_used_vars(value, used);
+        }
+        Stmt::CallMethod { call, .. } => collect_used_vars(call, used),
     }
 }
 
