@@ -173,7 +173,8 @@ fn check_declaration_order(program: &Program, diags: &mut Vec<Diagnostic>) {
             | TopLevel::Interface(_)
             | TopLevel::Module(_)
             | TopLevel::FunctionInterface(_)
-            | TopLevel::Keyword { .. } => continue,
+            | TopLevel::Keyword { .. }
+            | TopLevel::Hook { .. } => continue,
         };
         if let Some(f) = first_function {
             diags.push(Diagnostic::error(

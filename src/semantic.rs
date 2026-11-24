@@ -89,6 +89,14 @@ fn embedded(block: &parser_rs::Embedded, out: &mut Vec<SemanticToken>, syms: &mu
         out.extend(tokens);
         syms.extend(symbols);
         *next_scope = next;
+    } else {
+        // A textmacro's or novjass's text: not code here, shown as a comment.
+        for (k, line) in block.source.lines().enumerate() {
+            let len = line.chars().count();
+            if len > 0 {
+                out.push(SemanticToken::new(block.first_line + k, 1, len + 1, T::Comment, Modifiers::NONE));
+            }
+        }
     }
 }
 

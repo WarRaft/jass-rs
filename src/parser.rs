@@ -29,7 +29,9 @@ impl Parser {
     }
 
     pub fn parse_str_with(src: &str, dialect: Dialect) -> Result<Program, ParseError> {
-        Parser::new(Lexer::tokenize_with(src, dialect)?).program()
+        // A textmacro's or novjass's block isn't code of its place.
+        let tokens = Lexer::tokenize_with(src, dialect)?.into_iter().filter(|t| !matches!(&t.kind, TokenKind::Embedded(b) if b.lang != "zinc")).collect();
+        Parser::new(tokens).program()
     }
 
     fn peek(&self) -> &Token {
@@ -184,6 +186,15 @@ impl Parser {
                 self.advance();
                 let name = self.expect_identifier()?;
                 Ok(TopLevel::Keyword { modifiers, name, line })
+            }
+            TokenKind::Keyword(Kw::Hook) => {
+                self.advance();
+                let name = self.expect_identifier()?;
+                let mut target = self.expect_identifier()?;
+                if self.ts.eat(&TokenKind::Punct(Punct::Dot)) {
+                    target = format!("{target}.{}", self.expect_identifier()?);
+                }
+                Ok(TopLevel::Hook { name, target, line })
             }
             // `integer x = 1`, `constant integer X = 1` at the top level: a
             // global, moved into the `globals` block when the map is built.

@@ -120,7 +120,7 @@ impl Declarations {
                 | TopLevel::Keyword { name, .. } => {
                     self.others.insert(name.clone());
                 }
-                TopLevel::Stmt(_) | TopLevel::Zinc(_) => {}
+                TopLevel::Stmt(_) | TopLevel::Zinc(_) | TopLevel::Hook { .. } => {}
             }
         }
     }
@@ -364,7 +364,7 @@ impl Checker<'_> {
                         }
                     }
                 }
-                TopLevel::Stmt(_) | TopLevel::Zinc(_) | TopLevel::Keyword { .. } => {}
+                TopLevel::Stmt(_) | TopLevel::Zinc(_) | TopLevel::Keyword { .. } | TopLevel::Hook { .. } => {}
             }
         }
     }

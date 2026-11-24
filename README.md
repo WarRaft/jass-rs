@@ -326,7 +326,8 @@ Modifiers (`private`, `public`, `static`, `readonly`, `stub`,
 `this.x`), `super` the parent's; `Counter(5)` casts. A member of a
 member and an element of one chain: `a.b[i].c()`. JassHelper's
 preprocessor (`//! textmacro`, `//! runtextmacro`, `//! inject` ...)
-works on text before any of this.
+works on text before any of this. `hook Name Target` (`Target` a
+function or `S.m`): `TopLevel::Hook`.
 
 ---
 
@@ -339,10 +340,9 @@ Supported: everything in the reference above **except**:
 | `\r \b \f` escapes                        | decoded as the bare letter                              |
 | locals-first rule                         | `local` is accepted anywhere in a body                  |
 | type checking / declare-before-use        | no symbol or type resolution yet                        |
-| vJASS `hook`                              | not read                                                |
 | vJASS `static if` among a struct's members | only in a function's or method's body                  |
 | vJASS member statement after `debug` without `set`/`call` | `debug set .x = 1` reads, `debug .x = 1` doesn't |
-| JassHelper's preprocessor                 | `//! textmacro` and the like are comments to the lexer (a build refuses them) |
+| JassHelper's preprocessor                 | run by a build (`wc3-build`'s `preprocess`); here a `//! textmacro` ... `//! endtextmacro` and a `//! novjass` ... `//! endnovjass` are one token each (an embedded block, as `//! zinc`), skipped by the parser and shown as a comment; a `//! runtextmacro` is a comment |
 
 vJASS: everything in its reference above, in `Dialect::VJass` only (the
 lexer turns its words and `.` on; in plain JASS `library` is a name). The

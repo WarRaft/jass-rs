@@ -51,6 +51,14 @@ pub enum TopLevel {
         name: String,
         line: usize,
     },
+    /// vJASS: `hook Name Target`: before every call of `Name` (a native
+    /// or a function), `Target` (a function, or a struct's static method
+    /// `S.m`) is called with the same arguments.
+    Hook {
+        name: String,
+        target: String,
+        line: usize,
+    },
 }
 
 impl TopLevel {
@@ -58,7 +66,7 @@ impl TopLevel {
     pub fn line(&self) -> usize {
         match self {
             TopLevel::Globals(g) => g.first().map_or(0, |g| g.line),
-            TopLevel::TypeDef { line, .. } | TopLevel::Keyword { line, .. } => *line,
+            TopLevel::TypeDef { line, .. } | TopLevel::Keyword { line, .. } | TopLevel::Hook { line, .. } => *line,
             TopLevel::Native(sig) | TopLevel::FunctionInterface(sig) => sig.line,
             TopLevel::Function(f) => f.sig.line,
             TopLevel::Global(g) => g.line,

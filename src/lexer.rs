@@ -68,6 +68,27 @@ pub const ZINC_EMBED: EmbedSpec = EmbedSpec {
     lang: "zinc",
     open: "//! zinc",
     close: "//! endzinc",
+    prefix: false,
+};
+
+/// A `//! textmacro NAME [takes a, b]` (or `textmacro_once`) ...
+/// `//! endtextmacro` block: text JassHelper's preprocessor puts where a
+/// `//! runtextmacro` names it (a build does: `wc3-build`'s `preprocess`),
+/// not code of its own place. One token, skipped by the parser.
+pub const TEXTMACRO_EMBED: EmbedSpec = EmbedSpec {
+    lang: "textmacro",
+    open: "//! textmacro",
+    close: "//! endtextmacro",
+    prefix: true,
+};
+
+/// A `//! novjass` ... `//! endnovjass` block: what JassHelper leaves out
+/// (often a library's documentation). One token, skipped by the parser.
+pub const NOVJASS_EMBED: EmbedSpec = EmbedSpec {
+    lang: "novjass",
+    open: "//! novjass",
+    close: "//! endnovjass",
+    prefix: false,
 };
 
 /// The vJASS dialect: JASS plus vJASS keywords, `/* */` comments and
@@ -77,7 +98,7 @@ pub const ZINC_EMBED: EmbedSpec = EmbedSpec {
 pub const VJASS_SPEC: LexSpec = LexSpec {
     keywords: VJASS_KEYWORDS,
     block_comment: Some(("/*", "*/")),
-    embeds: &[ZINC_EMBED],
+    embeds: &[ZINC_EMBED, TEXTMACRO_EMBED, NOVJASS_EMBED],
     puncts: VJASS_PUNCTS,
     ..SPEC
 };

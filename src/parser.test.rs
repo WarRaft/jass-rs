@@ -501,3 +501,26 @@ fn vjass_words_are_names_in_jass() {
     assert!(matches!(&prog.items[0], TopLevel::Function(f) if f.body.len() == 2));
     assert!(Parser::parse_str("function F takes nothing returns nothing\n    call a.b()\nendfunction").is_err());
 }
+
+#[test]
+fn jasshelpers_preprocessor_blocks_arent_code_of_their_place() {
+    let src = "//! textmacro Getter takes NAME, TYPE\nfunction Get$NAME$ takes nothing returns $TYPE$\n    return $NAME$\nendfunction\n//! endtextmacro\n//! novjass\nfunction Documented takes thing x, returns nothing\n//! endnovjass\n//! textmacro_once Once\n    set $x$ = 1\n//!endtextmacro\nfunction F takes nothing returns nothing\n    //! runtextmacro Getter(\"A\", \"integer\")\nendfunction\n";
+    let p = Parser::parse_str_with(src, Dialect::VJass).unwrap_or_else(|e| panic!("line {}: {}", e.line, e.message));
+    assert_eq!(p.items.len(), 1, "{:?}", p.items);
+    // Plain JASS: lines starting `//` are comments, and the rest isn't JASS.
+    assert!(Parser::parse_str_with(src, Dialect::Jass).is_err());
+    // Highlighted as comments, the directives as macros.
+    let tokens = crate::semantic::semantic_tokens_with(src, Dialect::VJass);
+    assert!(tokens.iter().any(|t| t.line == 2 && t.ty == parser_rs::SemanticType::Comment), "{tokens:?}");
+}
+
+#[test]
+fn vjass_hooks() {
+    let src = "library L\n    hook RemoveUnit OnRemove\n    hook KillUnit Watch.killed\nendlibrary\n";
+    let p = Parser::parse_str_with(src, Dialect::VJass).unwrap_or_else(|e| panic!("line {}: {}", e.line, e.message));
+    let TopLevel::Library(l) = &p.items[0] else { panic!("{:?}", p.items) };
+    assert!(matches!(&l.items[0], TopLevel::Hook { name, target, line: 2 } if name == "RemoveUnit" && target == "OnRemove"));
+    assert!(matches!(&l.items[1], TopLevel::Hook { name, target, line: 3 } if name == "KillUnit" && target == "Watch.killed"));
+    // Plain JASS: `hook` is a name, and this no declaration.
+    assert!(Parser::parse_str("hook RemoveUnit OnRemove\n").is_err());
+}

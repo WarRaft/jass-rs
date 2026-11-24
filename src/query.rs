@@ -139,7 +139,7 @@ fn find_in_top_level<'a>(
             .find_map(|m| find_in_member(m, line, sc, ec))
             .or_else(|| self_or_none(AstRef::TopLevel(item), Span::whole_line(*l), line, sc, ec)),
         TopLevel::FunctionInterface(sig) => self_or_none(AstRef::TopLevel(item), Span::whole_line(sig.line), line, sc, ec),
-        TopLevel::Keyword { line: l, .. } => self_or_none(AstRef::TopLevel(item), Span::whole_line(*l), line, sc, ec),
+        TopLevel::Keyword { line: l, .. } | TopLevel::Hook { line: l, .. } => self_or_none(AstRef::TopLevel(item), Span::whole_line(*l), line, sc, ec),
     }
 }
 

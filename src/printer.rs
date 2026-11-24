@@ -88,6 +88,7 @@ fn top_level_node(item: &TopLevel) -> Node {
         TopLevel::FunctionInterface(sig) => {
             Node::leaf(format!("{}FunctionInterface {}", access(&sig.modifiers), sig_label(sig))).tag("sig", Some(Span::whole_line(sig.line)))
         }
+        TopLevel::Hook { name, target, line } => Node::leaf(format!("Hook {name} {target} (line {line})")).tag("decl", Some(Span::whole_line(*line))),
         TopLevel::Keyword { modifiers, name, line } => {
             Node::leaf(format!("{}Keyword {name} (line {line})", access(modifiers))).tag("decl", Some(Span::whole_line(*line)))
         }
