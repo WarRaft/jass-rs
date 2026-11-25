@@ -524,3 +524,28 @@ fn vjass_hooks() {
     // Plain JASS: `hook` is a name, and this no declaration.
     assert!(Parser::parse_str("hook RemoveUnit OnRemove\n").is_err());
 }
+
+#[test]
+fn the_manuals_syntax() {
+    // Delimited comments nest.
+    vjass("/* a\n/* b */\nc */\nfunction F takes nothing returns nothing\n    call G( /*5*/ 66) /* x */\n    /*\n    call G( /*5*/ 66)\n    */\nendfunction\n");
+    // `a:X` is `X[a]`, read and set.
+    let p = vjass("function F takes nothing returns nothing\n    local integer a = 3\n    local integer array X\n    set a:X = a:X + 10\nendfunction\n");
+    let TopLevel::Function(f) = &p.items[0] else { panic!() };
+    let Stmt::Set { name, index: Some(i), value, .. } = &f.body[2] else { panic!("{:?}", f.body[2]) };
+    assert_eq!((name.as_str(), &i.kind), ("X", &ExprKind::Var("a".into())));
+    assert!(matches!(&value.kind, ExprKind::Binary(x, _, _) if matches!(&x.kind, ExprKind::ArrayAccess(n, i) if n == "X" && i.kind == ExprKind::Var("a".into()))));
+    // `defaults nothing`.
+    vjass("interface I\n    method onBegin takes real x returns nothing defaults nothing\nendinterface\n");
+    // A cast as what's set, or called.
+    let p = vjass("function F takes A inst returns nothing\n    set C(inst).z = 5\n    call C(inst).m()\nendfunction\n");
+    let TopLevel::Function(f) = &p.items[0] else { panic!() };
+    assert!(matches!(&f.body[0], Stmt::SetMember { .. }) && matches!(&f.body[1], Stmt::CallMethod { .. }), "{:?}", f.body);
+    // A member `integer a[2]`: an array of 2.
+    let p = vjass("struct X[10000]\n    integer a[2]\n    integer b\nendstruct\n");
+    let TopLevel::Struct(s) = &p.items[0] else { panic!() };
+    let StructMember::Field(a) = &s.members[0] else { panic!() };
+    assert!(a.is_array && a.size.is_some(), "{a:?}");
+    let StructMember::Field(b) = &s.members[1] else { panic!() };
+    assert!(!b.is_array, "{b:?}");
+}

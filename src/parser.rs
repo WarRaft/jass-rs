@@ -299,7 +299,7 @@ impl Parser {
             if self.check(&TokenKind::Keyword(Kw::Method)) {
                 members.push(StructMember::Method(self.method(modifiers, line)?));
             } else {
-                let mut g = self.global_decl()?;
+                let mut g = self.global_decl_as(true)?;
                 g.modifiers = modifiers;
                 members.push(StructMember::Field(g));
             }
@@ -314,7 +314,17 @@ impl Parser {
         let name = if self.ts.eat(&TokenKind::Keyword(Kw::Operator)) { format!("operator {}", self.operator_name()?) } else { self.expect_identifier()? };
         let mut sig = self.sig_after_name(name, false, line)?;
         sig.modifiers = modifiers;
-        let defaults = if self.ts.eat(&TokenKind::Keyword(Kw::Defaults)) { Some(self.expr()?) } else { None };
+        let defaults = if self.ts.eat(&TokenKind::Keyword(Kw::Defaults)) {
+            // `defaults nothing`: a method returning nothing, done as nothing.
+            if self.check(&TokenKind::Keyword(Kw::Nothing)) {
+                let tok = self.advance();
+                Some(Expr::new(ExprKind::Null, tok_span(&tok)))
+            } else {
+                Some(self.expr()?)
+            }
+        } else {
+            None
+        };
         // A body unless the next line is no statement (an interface's).
         let body = if defaults.is_none() && self.method_has_body() {
             let body = self.stmt_block(&[TokenKind::Keyword(Kw::EndMethod)])?;
@@ -410,6 +420,12 @@ impl Parser {
     }
 
     fn global_decl(&mut self) -> Result<GlobalDecl, ParseError> {
+        self.global_decl_as(false)
+    }
+
+    /// A global, or (`member`) a struct's member, which may be an array
+    /// written `integer a[2]`, without `array`.
+    fn global_decl_as(&mut self, member: bool) -> Result<GlobalDecl, ParseError> {
         let line = self.peek().line;
         let is_constant = if self.check(&TokenKind::Keyword(Kw::Constant)) {
             self.advance();
@@ -425,6 +441,8 @@ impl Parser {
             false
         };
         let name = self.expect_identifier()?;
+        // vJASS: a member `integer a[2]` is an array of 2.
+        let is_array = is_array || (member && self.check(&TokenKind::Punct(Punct::LBracket)));
         // vJASS: a sized array, `integer array a[100]`.
         let size = if is_array && self.ts.eat(&TokenKind::Punct(Punct::LBracket)) {
             let size = self.expr()?;
@@ -648,14 +666,18 @@ impl Parser {
             TokenKind::Keyword(Kw::This | Kw::ThisType | Kw::Super) | TokenKind::Punct(Punct::Dot) => true,
             TokenKind::Ident(_) => match self.ts.nth_kind(1) {
                 TokenKind::Punct(Punct::Dot) => true,
-                // `a[i].b`: past the index.
-                TokenKind::Punct(Punct::LBracket) => {
+                // `a[i].b`: past the index; `S(x).b` (a cast): past the call.
+                open @ TokenKind::Punct(Punct::LBracket | Punct::LParen) => {
+                    let (open, close) = match open {
+                        TokenKind::Punct(Punct::LBracket) => (Punct::LBracket, Punct::RBracket),
+                        _ => (Punct::LParen, Punct::RParen),
+                    };
                     let mut depth = 0;
                     let mut i = 1;
                     loop {
                         match self.ts.nth_kind(i) {
-                            TokenKind::Punct(Punct::LBracket) => depth += 1,
-                            TokenKind::Punct(Punct::RBracket) => {
+                            TokenKind::Punct(p) if *p == open => depth += 1,
+                            TokenKind::Punct(p) if *p == close => {
                                 depth -= 1;
                                 if depth == 0 {
                                     return matches!(self.ts.nth_kind(i + 1), TokenKind::Punct(Punct::Dot));
@@ -709,6 +731,16 @@ impl Parser {
     /// `name = value` or `name[index] = value`, after `set` if `keyword`.
     fn assignment(&mut self, line: usize, keyword: bool) -> Result<Stmt, ParseError> {
         let name = self.expect_identifier()?;
+        // vJASS: `a:X` is `X[a]`.
+        if self.check(&TokenKind::Punct(Punct::Colon)) {
+            let at = self.peek().clone();
+            self.advance();
+            let array = self.expect_identifier()?;
+            self.expect(TokenKind::Punct(Punct::Assign))?;
+            let value = self.expr()?;
+            let index = Expr::new(ExprKind::Var(name), Span::new(at.line, at.col, at.line, at.col));
+            return Ok(Stmt::Set { name: array, index: Some(index), value, line, keyword });
+        }
         let index = if self.check(&TokenKind::Punct(Punct::LBracket)) {
             self.advance();
             let idx = self.expr()?;
@@ -1056,6 +1088,13 @@ impl Parser {
                     let close = self.expect(TokenKind::Punct(Punct::RBracket))?;
                     let span = Span::new(tok.line, tok.col, close.line, close.end_col);
                     Ok(Expr::new(ExprKind::ArrayAccess(name, Box::new(idx)), span))
+                } else if self.check(&TokenKind::Punct(Punct::Colon)) {
+                    // vJASS: `a:X` is `X[a]`, the index a name.
+                    self.advance();
+                    let array = self.peek().clone();
+                    let array_name = self.expect_identifier()?;
+                    let span = Span::new(tok.line, tok.col, array.line, array.end_col);
+                    Ok(Expr::new(ExprKind::ArrayAccess(array_name, Box::new(Expr::new(ExprKind::Var(name), tok_span(&tok)))), span))
                 } else {
                     Ok(Expr::new(ExprKind::Var(name), tok_span(&tok)))
                 }

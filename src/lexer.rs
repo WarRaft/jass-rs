@@ -59,6 +59,8 @@ const VJASS_PUNCTS: &[Punct] = &[
     Punct::RBracket,
     Punct::Comma,
     Punct::Dot,
+    // `a:X`, JassHelper's `X[a]`.
+    Punct::Colon,
 ];
 
 /// A `//! zinc` ... `//! endzinc` block: Zinc embedded in vJASS. The lexer
@@ -98,6 +100,8 @@ pub const NOVJASS_EMBED: EmbedSpec = EmbedSpec {
 pub const VJASS_SPEC: LexSpec = LexSpec {
     keywords: VJASS_KEYWORDS,
     block_comment: Some(("/*", "*/")),
+    // JassHelper's: `/* a /* b */ c */` is one comment.
+    nested_block_comments: true,
     embeds: &[ZINC_EMBED, TEXTMACRO_EMBED, NOVJASS_EMBED],
     puncts: VJASS_PUNCTS,
     ..SPEC
