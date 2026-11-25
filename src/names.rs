@@ -171,8 +171,7 @@ impl Declarations {
                     self.dynamic.insert(name.clone(), extends.clone());
                     self.others.insert(name.clone());
                 }
-                TopLevel::TypeDef { name, .. }
-                | TopLevel::Interface(TypeDecl { name, .. })
+                TopLevel::Interface(TypeDecl { name, .. })
                 | TopLevel::FunctionInterface(FunctionSig { name, .. })
                 | TopLevel::Keyword { name, .. } => {
                     self.others.insert(name.clone());
