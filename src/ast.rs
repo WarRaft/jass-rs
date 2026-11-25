@@ -177,6 +177,34 @@ pub enum StructMember {
     Method(MethodDecl),
     /// `implement [optional] Module`.
     Implement { name: String, optional: bool, line: usize },
+    /// `static if cond then` ... `endif` among the members: the branch its
+    /// constants choose is the struct's when the map is built.
+    StaticIf {
+        branches: Vec<(Expr, Vec<StructMember>)>,
+        else_branch: Option<Vec<StructMember>>,
+        line: usize,
+        end_line: usize,
+    },
+}
+
+/// `members` with every `static if`'s branches' in its place (all of
+/// them: which is there is known only as the map is built).
+pub fn all_members(members: &[StructMember]) -> Vec<&StructMember> {
+    let mut out = Vec::new();
+    for m in members {
+        match m {
+            StructMember::StaticIf { branches, else_branch, .. } => {
+                for (_, b) in branches {
+                    out.extend(all_members(b));
+                }
+                if let Some(b) = else_branch {
+                    out.extend(all_members(b));
+                }
+            }
+            m => out.push(m),
+        }
+    }
+    out
 }
 
 /// A method: an operator's name is `operator []`, `operator x=` ...; an

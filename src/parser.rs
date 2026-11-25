@@ -316,12 +316,53 @@ impl Parser {
 
     /// A struct's, interface's or module's members, up to `end`.
     fn members(&mut self, end: Kw) -> Result<Vec<StructMember>, ParseError> {
+        self.members_until(end, &[end])
+    }
+
+    /// `static if cond then` ... `endif` among the members of a type that
+    /// ends with `end`.
+    fn static_if_members(&mut self, end: Kw) -> Result<StructMember, ParseError> {
+        let line = self.advance().line;
+        self.expect(TokenKind::Keyword(Kw::If))?;
+        let stops = [Kw::ElseIf, Kw::Else, Kw::EndIf, end];
+        let mut branches = Vec::new();
+        let cond = self.expr()?;
+        self.expect(TokenKind::Keyword(Kw::Then))?;
+        branches.push((cond, self.members_until(end, &stops)?));
+        let mut else_branch = None;
+        loop {
+            match self.peek_kind() {
+                TokenKind::Keyword(Kw::ElseIf) => {
+                    self.advance();
+                    let cond = self.expr()?;
+                    self.expect(TokenKind::Keyword(Kw::Then))?;
+                    branches.push((cond, self.members_until(end, &stops)?));
+                }
+                TokenKind::Keyword(Kw::Else) => {
+                    self.advance();
+                    else_branch = Some(self.members_until(end, &[Kw::EndIf, end])?);
+                    break;
+                }
+                _ => break,
+            }
+        }
+        let end_line = self.expect(TokenKind::Keyword(Kw::EndIf))?.line;
+        Ok(StructMember::StaticIf { branches, else_branch, line, end_line })
+    }
+
+    /// Members up to one of `stops` (the type's `end` among them).
+    fn members_until(&mut self, end: Kw, stops: &[Kw]) -> Result<Vec<StructMember>, ParseError> {
         let mut members = Vec::new();
-        while !self.check(&TokenKind::Keyword(end)) {
+        while !stops.iter().any(|k| self.check(&TokenKind::Keyword(*k))) {
             if self.check(&TokenKind::Eof) {
                 return Err(self.error(format!("unexpected end of file: expected {}", TokenKind::Keyword(end))));
             }
             let line = self.peek().line;
+            // `static if` among the members.
+            if self.check(&TokenKind::Keyword(Kw::Static)) && matches!(self.ts.nth_kind(1), TokenKind::Keyword(Kw::If)) {
+                members.push(self.static_if_members(end)?);
+                continue;
+            }
             if self.ts.eat(&TokenKind::Keyword(Kw::Implement)) {
                 let optional = self.ts.eat(&TokenKind::Keyword(Kw::Optional));
                 let name = self.expect_identifier()?;
@@ -580,7 +621,16 @@ impl Parser {
 
     fn stmt_block(&mut self, stop: &[TokenKind]) -> Result<Vec<Stmt>, ParseError> {
         let mut stmts = Vec::new();
-        while !stop.contains(self.peek_kind()) {
+        loop {
+            // `debug else`, `debug endif` ...: a `debug if`'s written a line
+            // at a time, as JassHelper takes them (each `debug` line
+            // there in debug mode only, the `if` with them).
+            if self.check(&TokenKind::Keyword(Kw::Debug)) && stop.contains(self.ts.nth_kind(1)) {
+                self.advance();
+            }
+            if stop.contains(self.peek_kind()) {
+                break;
+            }
             if self.check(&TokenKind::Eof) {
                 return Err(self.error("unexpected end of file"));
             }
@@ -704,6 +754,13 @@ impl Parser {
     fn set_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
         self.expect(TokenKind::Keyword(Kw::Set))?;
+        // vJASS: `set this = ...`, a static method's local named `this`.
+        if self.vjass && self.check(&TokenKind::Keyword(Kw::This)) && matches!(self.ts.nth_kind(1), TokenKind::Punct(Punct::Assign)) {
+            self.advance();
+            self.advance();
+            let value = self.expr()?;
+            return Ok(Stmt::Set { name: "this".into(), index: None, value, line, keyword: true });
+        }
         if self.starts_member() {
             return self.member_stmt(line, true);
         }

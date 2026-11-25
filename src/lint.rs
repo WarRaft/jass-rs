@@ -38,7 +38,7 @@ fn lint_items(items: &[TopLevel], diags: &mut Vec<Diagnostic>) {
                 {
                     check_array_struct(st, diags);
                 }
-                for m in members {
+                for m in all_members(members) {
                     if let StructMember::Method(MethodDecl { sig, body: Some(body), .. }) = m {
                         let f = FunctionDecl { sig: sig.clone(), body: body.clone() };
                         check_signature(&f.sig, "method", diags);
@@ -58,7 +58,7 @@ fn lint_items(items: &[TopLevel], diags: &mut Vec<Diagnostic>) {
 /// a global's: allowed.
 fn check_array_struct(st: &StructDecl, diags: &mut Vec<Diagnostic>) {
     use crate::array_struct as says;
-    for m in &st.members {
+    for m in all_members(&st.members) {
         match m {
             StructMember::Field(g) if !g.modifiers.is_static => {
                 if g.initializer.is_some() {

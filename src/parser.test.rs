@@ -589,4 +589,18 @@ fn vjass_as_real_libraries_write_it() {
     let TopLevel::Struct(s) = &p.items[0] else { panic!() };
     let StructMember::Method(m) = &s.members[0] else { panic!() };
     assert!(matches!(&m.body.as_ref().unwrap()[0], Stmt::Local { name, .. } if name == "this"));
+    // ... and set it.
+    let p = v("struct T\n    static method create takes nothing returns T\n        local T this = 1\n        set this = this + 1\n        return this\n    endmethod\nendstruct\n");
+    let TopLevel::Struct(s) = &p.items[0] else { panic!() };
+    let StructMember::Method(m) = &s.members[0] else { panic!() };
+    assert!(matches!(&m.body.as_ref().unwrap()[1], Stmt::Set { name, .. } if name == "this"));
+    // `static if` among a struct's members.
+    let p = v("struct font extends array\n    static if MORE then\n        private static Table chars\n        implement optional InitFontTable\n    else\n        private static integer n\n    endif\nendstruct\n");
+    let TopLevel::Struct(s) = &p.items[0] else { panic!() };
+    assert!(matches!(&s.members[0], StructMember::StaticIf { branches, else_branch: Some(e), .. } if branches[0].1.len() == 2 && e.len() == 1));
+    assert_eq!(all_members(&s.members).len(), 3);
+    // A `debug if` a line at a time.
+    let p = v("function F takes integer i returns nothing\n    debug if i < 0 then\n        debug call BJDebugMsg(\"low\")\n    debug else\n        debug call BJDebugMsg(\"ok\")\n    debug endif\nendfunction\n");
+    let TopLevel::Function(f) = &p.items[0] else { panic!() };
+    assert!(matches!(&f.body[0], Stmt::Debug { stmt, .. } if matches!(&**stmt, Stmt::If { else_branch: Some(_), .. })), "{:?}", f.body);
 }

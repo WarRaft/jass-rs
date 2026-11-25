@@ -152,6 +152,11 @@ fn find_in_member<'a>(m: &'a StructMember, line: usize, sc: usize, ec: usize) ->
             .or_else(|| self_or_none(AstRef::GlobalDecl(d), Span::whole_line(d.line), line, sc, ec)),
         StructMember::Method(md) => md.body.iter().flatten().find_map(|s| find_in_stmt(s, line, sc, ec)),
         StructMember::Implement { .. } => None,
+        StructMember::StaticIf { branches, else_branch, .. } => branches
+            .iter()
+            .flat_map(|(_, b)| b)
+            .chain(else_branch.iter().flatten())
+            .find_map(|m| find_in_member(m, line, sc, ec)),
     }
 }
 

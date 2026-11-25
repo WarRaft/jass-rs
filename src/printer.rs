@@ -135,6 +135,10 @@ fn member_node(m: &StructMember) -> Node {
         StructMember::Implement { name, optional, line } => {
             Node::leaf(format!("Implement {}{name} (line {line})", if *optional { "optional " } else { "" })).tag("decl", Some(Span::whole_line(*line)))
         }
+        StructMember::StaticIf { branches, else_branch, line, end_line } => {
+            let children = branches.iter().flat_map(|(_, b)| b).chain(else_branch.iter().flatten()).map(member_node).collect();
+            Node::with_children(format!("StaticIf (lines {line}-{end_line})"), children).tag("container", Some(Span::new(*line, 1, *end_line, 1)))
+        }
     }
 }
 

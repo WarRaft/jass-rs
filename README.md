@@ -328,10 +328,14 @@ without commas, as JassHelper reads them and real libraries write them,
 often a comment between each (`requires /* */ Ascii /* */ Table /* */
 optional ErrorMessage`): no item of a library starts with a name, so the
 next name or `optional` is the next one. `static if` goes around
-declarations too, in a library or at the top (`TopLevel::StaticIf`, every
-branch's read: which is there is the build's), as it does around
-statements. A static method may name a local `this` (Table's `local
-Table this = ...`).
+declarations too, in a library or at the top (`TopLevel::StaticIf`), and
+among a struct's, module's or interface's members
+(`StructMember::StaticIf`; `ast::all_members` gives every branch's), as
+it does around statements: every branch is read, which is there is the
+build's. A static method may name a local `this` and set it (Table's
+`local Table this = ...`, `set this = ...`). A `debug if` may be written a
+line at a time, `debug` before its `else`, `elseif` and `endif` too, as
+JassHelper takes a debug line.
 `thistype` is the struct a member is in, `this` the instance (`.x` is
 `this.x`), `super` the parent's; `Counter(5)` casts. A member of a
 member and an element of one chain: `a.b[i].c()`. JassHelper's
@@ -350,7 +354,6 @@ Supported: everything in the reference above **except**:
 | `\r \b \f` escapes                        | decoded as the bare letter                              |
 | locals-first rule                         | `local` is accepted anywhere in a body                  |
 | type checking / declare-before-use        | no symbol or type resolution yet                        |
-| vJASS `static if` among a struct's members | in a function's or method's body, and around declarations (`TopLevel::StaticIf`) |
 | vJASS member statement after `debug` without `set`/`call` | `debug set .x = 1` reads, `debug .x = 1` doesn't |
 | JassHelper's preprocessor                 | run by a build (`wc3-build`'s `preprocess`); here a `//! textmacro` ... `//! endtextmacro` and a `//! novjass` ... `//! endnovjass` are one token each (an embedded block, as `//! zinc`), skipped by the parser and shown as a comment; a `//! runtextmacro` is a comment |
 

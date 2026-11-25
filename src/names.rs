@@ -95,7 +95,7 @@ pub struct Members {
 impl Members {
     fn of(members: &[StructMember]) -> Members {
         let mut m = Members::default();
-        for x in members {
+        for x in all_members(members) {
             match x {
                 StructMember::Method(me) => {
                     m.methods.insert(me.sig.name.clone());
@@ -103,7 +103,7 @@ impl Members {
                 }
                 StructMember::Implement { name, .. } => m.implements.push(name.clone()),
                 StructMember::Field(g) if !g.modifiers.is_static => m.fields.push((g.name.clone(), g.initializer.is_some(), g.is_array)),
-                StructMember::Field(_) => {}
+                StructMember::Field(_) | StructMember::StaticIf { .. } => {}
             }
         }
         m
@@ -464,13 +464,18 @@ impl Checker<'_> {
                         self.array_struct_modules(st);
                     }
                     for m in members {
+                        if let StructMember::StaticIf { branches, .. } = m {
+                            branches.iter().for_each(|(c, _)| self.condition(c, "static if"));
+                        }
+                    }
+                    for m in all_members(members) {
                         match m {
                             StructMember::Field(g) => self.global(g),
                             StructMember::Method(MethodDecl { sig, body: Some(body), .. }) => {
                                 self.function(&FunctionDecl { sig: sig.clone(), body: body.clone() });
                             }
                             StructMember::Method(MethodDecl { sig, .. }) => self.signature(sig),
-                            StructMember::Implement { .. } => {}
+                            StructMember::Implement { .. } | StructMember::StaticIf { .. } => {}
                         }
                     }
                     self.current = None;
@@ -821,7 +826,7 @@ impl Checker<'_> {
     /// theirs) would give it that it can't have, at each `implement`.
     fn array_struct_modules(&mut self, st: &StructDecl) {
         use crate::array_struct as says;
-        for m in &st.members {
+        for m in all_members(&st.members) {
             let StructMember::Implement { name, line, .. } = m else { continue };
             // The module, the modules it implements ... each once.
             let mut queue = vec![name.clone()];
