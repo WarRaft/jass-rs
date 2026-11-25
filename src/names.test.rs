@@ -346,3 +346,28 @@ endstruct
     // Nothing of the manual: the error says what's wrong itself.
     assert!(!said.iter().any(|(_, m)| m.contains("manual")), "{said:?}");
 }
+
+#[test]
+fn a_nested_scopes_public_names() {
+    let src = "\
+library nestedtest
+    scope B
+        globals
+            public integer N = 5
+        endglobals
+        public function display takes nothing returns nothing
+        endfunction
+    endscope
+    function nestedDoTest takes nothing returns nothing
+        call B_display()
+    endfunction
+endlibrary
+function outside takes nothing returns nothing
+    set nestedtest_B_N = -4
+    call nestedtest_B_display()
+endfunction
+";
+    let prog = crate::Parser::parse_str_with(src, crate::Dialect::VJass).unwrap();
+    let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
+    assert!(said.is_empty(), "{said:?}");
+}

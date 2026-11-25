@@ -113,22 +113,26 @@ impl Declarations {
     /// their names come with their own language.
     pub fn of(program: &Program) -> Declarations {
         let mut d = Declarations::default();
-        d.add_items(&program.items, None);
+        d.add_items(&program.items, &[]);
         d
     }
 
-    /// The declarations of `items`, in vJASS's library or scope `scope`.
-    fn add_items(&mut self, items: &[TopLevel], scope: Option<&str>) {
-        // A `public` one is everyone's as `Scope_name` too.
-        let public = |name: &str, m: &Modifiers| match (scope, m.access) {
-            (Some(s), Access::Public) => Some(format!("{s}_{name}")),
-            _ => None,
+    /// The declarations of `items`, in vJASS's library or scope whose path
+    /// is `scope` (a scope in a scope: `[Outer, Inner]`).
+    fn add_items(&mut self, items: &[TopLevel], scope: &[String]) {
+        // A `public` one is everyone's as `Scope_name` too; a nested
+        // scope's as `Outer_Inner_name`, and `Inner_name` in `Outer`.
+        let public = |name: &str, m: &Modifiers| -> Vec<String> {
+            match m.access {
+                Access::Public if !scope.is_empty() => (0..scope.len()).map(|k| format!("{}_{name}", scope[k..].join("_"))).collect(),
+                _ => Vec::new(),
+            }
         };
         for item in items {
             match item {
                 TopLevel::Function(f) => {
                     self.add_sig(&f.sig, false);
-                    if let Some(n) = public(&f.sig.name, &f.sig.modifiers) {
+                    for n in public(&f.sig.name, &f.sig.modifiers) {
                         self.add_sig(&FunctionSig { name: n, ..f.sig.clone() }, false);
                     }
                 }
@@ -136,7 +140,7 @@ impl Declarations {
                 TopLevel::Globals(decls) => {
                     for g in decls {
                         self.add_global(g);
-                        if let Some(n) = public(&g.name, &g.modifiers) {
+                        for n in public(&g.name, &g.modifiers) {
                             self.add_global(&GlobalDecl { name: n, ..g.clone() });
                         }
                     }
@@ -145,7 +149,11 @@ impl Declarations {
                 TopLevel::TypeDef { name, extends, size: None, .. } => {
                     self.types.insert(name.clone(), extends.clone());
                 }
-                TopLevel::Library(l) => self.add_items(&l.items, Some(&l.name)),
+                TopLevel::Library(l) => {
+                    let mut path = scope.to_vec();
+                    path.push(l.name.clone());
+                    self.add_items(&l.items, &path);
+                }
                 TopLevel::Struct(st) => {
                     if st.extends.as_deref() == Some("array") {
                         self.array_structs.entry(st.name.clone()).or_insert_with(|| Members::of(&st.members));
