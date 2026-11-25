@@ -132,6 +132,7 @@ fn find_in_top_level<'a>(
                 )
             }),
         TopLevel::Library(l) => l.items.iter().find_map(|i| find_in_top_level(i, line, sc, ec)),
+        TopLevel::StaticIf { .. } => item.static_if_items().find_map(|i| find_in_top_level(i, line, sc, ec)),
         TopLevel::Struct(StructDecl { members, line: l, .. })
         | TopLevel::Interface(TypeDecl { members, line: l, .. })
         | TopLevel::Module(TypeDecl { members, line: l, .. }) => members

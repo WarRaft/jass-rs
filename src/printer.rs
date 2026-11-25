@@ -58,6 +58,10 @@ fn top_level_node(item: &TopLevel) -> Node {
             let label = format!("{}Type {name} extends {extends}{} (line {line})", access(modifiers), if size.is_some() { " array" } else { "" });
             Node::with_children(label, size.iter().map(expr_node).collect()).tag("decl", Some(Span::whole_line(*line)))
         }
+        TopLevel::StaticIf { line, end_line, .. } => {
+            let children = item.static_if_items().map(top_level_node).collect();
+            Node::with_children(format!("StaticIf (lines {line}-{end_line})"), children).tag("container", Some(Span::new(*line, 1, *end_line, 1)))
+        }
         TopLevel::Library(l) => {
             let kind = if l.scope { "Scope" } else if l.once { "LibraryOnce" } else { "Library" };
             let mut label = format!("{kind} {}", l.name);

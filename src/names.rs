@@ -157,6 +157,7 @@ impl Declarations {
                     path.push(l.name.clone());
                     self.add_items(&l.items, &path);
                 }
+                TopLevel::StaticIf { .. } => self.add_items(&item.static_if_items().cloned().collect::<Vec<_>>(), scope),
                 TopLevel::Struct(st) => {
                     if st.extends.as_deref() == Some("array") {
                         self.array_structs.entry(st.name.clone()).or_insert_with(|| Members::of(&st.members));
@@ -446,6 +447,12 @@ impl Checker<'_> {
                 TopLevel::Global(g) => self.global(g),
                 TopLevel::TypeDef { extends, line, .. } => self.type_name(extends, *line),
                 TopLevel::Library(l) => self.items(&l.items),
+                TopLevel::StaticIf { branches, .. } => {
+                    for (cond, _) in branches {
+                        self.condition(cond, "static if");
+                    }
+                    self.items(&item.static_if_items().cloned().collect::<Vec<_>>());
+                }
                 TopLevel::Struct(StructDecl { members, .. }) | TopLevel::Module(TypeDecl { members, .. }) | TopLevel::Interface(TypeDecl { members, .. }) => {
                     self.current = match item {
                         TopLevel::Struct(st) => Some(st.name.clone()),

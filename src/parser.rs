@@ -90,6 +90,10 @@ impl Parser {
     }
 
     fn top_level(&mut self) -> Result<TopLevel, ParseError> {
+        // vJASS: `static if` around declarations.
+        if self.check(&TokenKind::Keyword(Kw::Static)) && matches!(self.ts.nth_kind(1), TokenKind::Keyword(Kw::If)) {
+            return self.static_if_items();
+        }
         // vJASS: `private`, `public` ... before a declaration.
         if self.starts_modifiers() {
             let line = self.peek().line;
@@ -236,7 +240,13 @@ impl Parser {
                     loop {
                         let optional = self.ts.eat(&TokenKind::Keyword(Kw::Optional));
                         requires.push((self.expect_identifier()?, optional));
-                        if !self.ts.eat(&TokenKind::Punct(Punct::Comma)) {
+                        // Commas between them, or nothing: no item of a
+                        // library starts with a name, so another name (or
+                        // `optional`) is the next one (`requires A B`, as
+                        // JassHelper reads it, often with comments between).
+                        if !self.ts.eat(&TokenKind::Punct(Punct::Comma))
+                            && !matches!(self.peek_kind(), TokenKind::Ident(_) | TokenKind::Keyword(Kw::Optional))
+                        {
                             break;
                         }
                     }
@@ -318,7 +328,10 @@ impl Parser {
                 members.push(StructMember::Implement { name, optional, line });
                 continue;
             }
-            let modifiers = self.modifiers();
+            // `debug` before a member: there only in debug mode.
+            let debug = self.ts.eat(&TokenKind::Keyword(Kw::Debug));
+            let mut modifiers = self.modifiers();
+            modifiers.is_debug = debug;
             if self.check(&TokenKind::Keyword(Kw::Method)) {
                 members.push(StructMember::Method(self.method(modifiers, line)?));
             } else {
@@ -669,7 +682,9 @@ impl Parser {
         } else {
             false
         };
-        let name = self.expect_identifier()?;
+        // vJASS: a static method's local may be named `this` (Table's
+        // `local Table this = ...`): its `this` then.
+        let name = if self.vjass && self.ts.eat(&TokenKind::Keyword(Kw::This)) { "this".to_string() } else { self.expect_identifier()? };
         let initializer = if self.check(&TokenKind::Punct(Punct::Assign)) {
             self.advance();
             Some(self.expr()?)
@@ -751,6 +766,47 @@ impl Parser {
             ExprKind::Call(name, args) => Ok(Stmt::Call { name, args, line, keyword }),
             _ => Err(self.error("expected '=' or a call")),
         }
+    }
+
+    /// vJASS: `static if cond then ... [elseif ...] [else ...] endif`
+    /// around declarations.
+    fn static_if_items(&mut self) -> Result<TopLevel, ParseError> {
+        let line = self.advance().line;
+        self.expect(TokenKind::Keyword(Kw::If))?;
+        let stops = [TokenKind::Keyword(Kw::ElseIf), TokenKind::Keyword(Kw::Else), TokenKind::Keyword(Kw::EndIf)];
+        let items = |p: &mut Self, stops: &[TokenKind]| -> Result<Vec<TopLevel>, ParseError> {
+            let mut out = Vec::new();
+            while !stops.iter().any(|s| p.check(s)) {
+                if p.check(&TokenKind::Eof) {
+                    return Err(p.error("unexpected end of file inside a static if: expected 'endif'"));
+                }
+                out.push(p.top_level()?);
+            }
+            Ok(out)
+        };
+        let mut branches = Vec::new();
+        let cond = self.expr()?;
+        self.expect(TokenKind::Keyword(Kw::Then))?;
+        branches.push((cond, items(self, &stops)?));
+        let mut else_branch = None;
+        loop {
+            match self.peek_kind() {
+                TokenKind::Keyword(Kw::ElseIf) => {
+                    self.advance();
+                    let cond = self.expr()?;
+                    self.expect(TokenKind::Keyword(Kw::Then))?;
+                    branches.push((cond, items(self, &stops)?));
+                }
+                TokenKind::Keyword(Kw::Else) => {
+                    self.advance();
+                    else_branch = Some(items(self, &[TokenKind::Keyword(Kw::EndIf)])?);
+                    break;
+                }
+                _ => break,
+            }
+        }
+        let end_line = self.expect(TokenKind::Keyword(Kw::EndIf))?.line;
+        Ok(TopLevel::StaticIf { branches, else_branch, line, end_line })
     }
 
     /// vJASS: `static if cond then ... [elseif ...] [else ...] endif`.

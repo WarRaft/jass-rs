@@ -556,3 +556,37 @@ fn an_inject_block_isnt_top_level_code() {
     assert!(matches!(p.items.as_slice(), [TopLevel::Function(_)]), "{:?}", p.items);
     assert!(crate::lint(&p).is_empty());
 }
+
+/// vJASS as real maps write it (three-corridors: Nestharus', Bribe's and
+/// BPower's libraries).
+#[test]
+fn vjass_as_real_libraries_write_it() {
+    let v = |src: &str| crate::parse_with(src, crate::Dialect::VJass).unwrap_or_else(|e| panic!("{e:?}\n{src}"));
+    // Requirements with nothing between them but comments, `optional` too.
+    let p = v("library Font /* v1.0\n*   */ requires /*\n*       */ Ascii /* a\n*       */ Table /* b\n*       */ optional ErrorMessage /* c\n*/\nendlibrary\n");
+    let TopLevel::Library(l) = &p.items[0] else { panic!() };
+    assert_eq!(l.requires, [("Ascii".into(), false), ("Table".into(), false), ("ErrorMessage".into(), true)]);
+    // Commas still, and `initializer` after them.
+    let p = v("library A requires B, optional C initializer Init\nendlibrary\n");
+    let TopLevel::Library(l) = &p.items[0] else { panic!() };
+    assert_eq!((l.requires.len(), l.initializer.as_deref()), (2, Some("Init")));
+    // A member only in debug mode.
+    let p = v("struct Queue\n    debug private boolean isNode\n    debug method check takes nothing returns nothing\n    endmethod\nendstruct\n");
+    let TopLevel::Struct(s) = &p.items[0] else { panic!() };
+    assert!(s.members.iter().all(|m| match m {
+        StructMember::Field(g) => g.modifiers.is_debug,
+        StructMember::Method(f) => f.sig.modifiers.is_debug,
+        _ => false,
+    }));
+    // `static if` around declarations, in a library.
+    let p = v("library Tools\n    static if DEBUG_MODE then\n        private function DebugMsg takes string s returns nothing\n        endfunction\n    else\n        globals\n            integer x\n        endglobals\n    endif\nendlibrary\n");
+    let TopLevel::Library(l) = &p.items[0] else { panic!() };
+    let TopLevel::StaticIf { branches, else_branch, line, end_line } = &l.items[0] else { panic!("{:?}", l.items) };
+    assert_eq!((branches.len(), else_branch.as_ref().map(Vec::len), *line, *end_line), (1, Some(1), 2, 9));
+    assert_eq!(l.items[0].static_if_items().count(), 2);
+    // A static method's local named `this`.
+    let p = v("struct Table\n    static method create takes nothing returns Table\n        local Table this = 1\n        return this\n    endmethod\nendstruct\n");
+    let TopLevel::Struct(s) = &p.items[0] else { panic!() };
+    let StructMember::Method(m) = &s.members[0] else { panic!() };
+    assert!(matches!(&m.body.as_ref().unwrap()[0], Stmt::Local { name, .. } if name == "this"));
+}

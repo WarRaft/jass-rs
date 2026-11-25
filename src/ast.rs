@@ -38,6 +38,15 @@ pub enum TopLevel {
     /// vJASS: `library` (`library_once`) ... `endlibrary`, `scope` ...
     /// `endscope`.
     Library(LibraryDecl),
+    /// vJASS: `static if cond then` ... `endif` around declarations (in a
+    /// library or at the top): the branch its constants choose is there
+    /// when the map is built, the others aren't.
+    StaticIf {
+        branches: Vec<(Expr, Vec<TopLevel>)>,
+        else_branch: Option<Vec<TopLevel>>,
+        line: usize,
+        end_line: usize,
+    },
     /// vJASS: `struct` ... `endstruct`.
     Struct(StructDecl),
     /// vJASS: `interface` ... `endinterface`: methods' signatures.
@@ -64,6 +73,16 @@ pub enum TopLevel {
 }
 
 impl TopLevel {
+    /// A `static if`'s declarations, every branch's (which one is there is
+    /// known only as the map is built); none for anything else.
+    pub fn static_if_items(&self) -> impl Iterator<Item = &TopLevel> {
+        let (branches, else_branch) = match self {
+            TopLevel::StaticIf { branches, else_branch, .. } => (branches.as_slice(), else_branch.as_deref()),
+            _ => (&[][..], None),
+        };
+        branches.iter().flat_map(|(_, b)| b).chain(else_branch.into_iter().flatten())
+    }
+
     /// The line the item starts on.
     pub fn line(&self) -> usize {
         match self {
@@ -75,6 +94,7 @@ impl TopLevel {
             TopLevel::Stmt(s) => s.line(),
             TopLevel::Zinc(z) => z.open.start_line,
             TopLevel::Library(l) => l.line,
+            TopLevel::StaticIf { line, .. } => *line,
             TopLevel::Struct(s) => s.line,
             TopLevel::Interface(t) | TopLevel::Module(t) => t.line,
         }
@@ -101,6 +121,8 @@ pub struct Modifiers {
     pub is_readonly: bool,
     pub is_stub: bool,
     pub is_delegate: bool,
+    /// `debug` before a struct's member: there only in debug mode.
+    pub is_debug: bool,
 }
 
 /// A vJASS library or scope.

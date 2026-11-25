@@ -31,6 +31,7 @@ fn lint_items(items: &[TopLevel], diags: &mut Vec<Diagnostic>) {
             TopLevel::Zinc(block) => diags.extend(zinc_rs::lint(&block.program)),
             TopLevel::Stmt(s) => diags.push(Diagnostic::error(rule::STATEMENT_OUTSIDE_FUNCTION, top_level_stmt_message(s), s.line())),
             TopLevel::Library(l) => lint_items(&l.items, diags),
+            TopLevel::StaticIf { .. } => lint_items(&item.static_if_items().cloned().collect::<Vec<_>>(), diags),
             TopLevel::Struct(StructDecl { members, .. }) | TopLevel::Module(TypeDecl { members, .. }) => {
                 if let TopLevel::Struct(st) = item
                     && st.extends.as_deref() == Some("array")
@@ -198,6 +199,7 @@ fn check_declaration_order(program: &Program, diags: &mut Vec<Diagnostic>) {
             TopLevel::Stmt(_)
             | TopLevel::Zinc(_)
             | TopLevel::Library(_)
+            | TopLevel::StaticIf { .. }
             | TopLevel::Struct(_)
             | TopLevel::Interface(_)
             | TopLevel::Module(_)
