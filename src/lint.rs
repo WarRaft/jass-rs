@@ -32,6 +32,11 @@ fn lint_items(items: &[TopLevel], diags: &mut Vec<Diagnostic>) {
             TopLevel::Stmt(s) => diags.push(Diagnostic::error(rule::STATEMENT_OUTSIDE_FUNCTION, top_level_stmt_message(s), s.line())),
             TopLevel::Library(l) => lint_items(&l.items, diags),
             TopLevel::Struct(StructDecl { members, .. }) | TopLevel::Module(TypeDecl { members, .. }) => {
+                if let TopLevel::Struct(st) = item
+                    && st.extends.as_deref() == Some("array")
+                {
+                    check_array_struct(st, diags);
+                }
                 for m in members {
                     if let StructMember::Method(MethodDecl { sig, body: Some(body), .. }) = m {
                         let f = FunctionDecl { sig: sig.clone(), body: body.clone() };
@@ -40,6 +45,30 @@ fn lint_items(items: &[TopLevel], diags: &mut Vec<Diagnostic>) {
                         check_function(&f, diags);
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What JassHelper's manual says a struct `extends array` can't have
+/// (Array structs): its instances are never allocated, so a member has no
+/// default value, isn't an array, and there's no `onDestroy`. A static
+/// member's value is a global's: allowed.
+fn check_array_struct(st: &StructDecl, diags: &mut Vec<Diagnostic>) {
+    let why = "an array struct's instances are never allocated (JassHelper's manual, Array structs)";
+    for m in &st.members {
+        match m {
+            StructMember::Field(g) if !g.modifiers.is_static => {
+                if g.initializer.is_some() {
+                    diags.push(Diagnostic::error(rule::ARRAY_STRUCT, format!("{} extends array: its member '{}' can't have a default value, it's zero, null or false: {why}", st.name, g.name), g.line));
+                }
+                if g.is_array {
+                    diags.push(Diagnostic::error(rule::ARRAY_STRUCT, format!("{} extends array: its member '{}' can't be an array: {why}", st.name, g.name), g.line));
+                }
+            }
+            StructMember::Method(me) if !me.sig.modifiers.is_static && me.sig.name == "onDestroy" => {
+                diags.push(Diagnostic::error(rule::ARRAY_STRUCT, format!("{} extends array: it can't have onDestroy, nothing destroys its instances: {why}", st.name), me.sig.line));
             }
             _ => {}
         }

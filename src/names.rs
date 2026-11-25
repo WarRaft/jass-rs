@@ -71,6 +71,34 @@ pub struct Declarations {
     pub types: HashMap<String, String>,
     /// Names known without anything more (another language's).
     pub others: HashSet<String>,
+    /// vJASS: each struct `extends array`, what it has (`array-struct`).
+    pub array_structs: HashMap<String, Members>,
+    /// vJASS: each module, what it gives a struct that implements it.
+    pub modules: HashMap<String, Members>,
+}
+
+/// A vJASS struct's or module's methods (static or not) and the modules
+/// it implements.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Members {
+    pub methods: HashSet<String>,
+    pub implements: Vec<String>,
+}
+
+impl Members {
+    fn of(members: &[StructMember]) -> Members {
+        let mut m = Members::default();
+        for x in members {
+            match x {
+                StructMember::Method(me) => {
+                    m.methods.insert(me.sig.name.clone());
+                }
+                StructMember::Implement { name, .. } => m.implements.push(name.clone()),
+                StructMember::Field(_) => {}
+            }
+        }
+        m
+    }
 }
 
 impl Declarations {
@@ -112,10 +140,18 @@ impl Declarations {
                     self.types.insert(name.clone(), extends.clone());
                 }
                 TopLevel::Library(l) => self.add_items(&l.items, Some(&l.name)),
+                TopLevel::Struct(st) => {
+                    if st.extends.as_deref() == Some("array") {
+                        self.array_structs.entry(st.name.clone()).or_insert_with(|| Members::of(&st.members));
+                    }
+                    self.others.insert(st.name.clone());
+                }
+                TopLevel::Module(m) => {
+                    self.modules.entry(m.name.clone()).or_insert_with(|| Members::of(&m.members));
+                    self.others.insert(m.name.clone());
+                }
                 TopLevel::TypeDef { name, .. }
-                | TopLevel::Struct(StructDecl { name, .. })
                 | TopLevel::Interface(TypeDecl { name, .. })
-                | TopLevel::Module(TypeDecl { name, .. })
                 | TopLevel::FunctionInterface(FunctionSig { name, .. })
                 | TopLevel::Keyword { name, .. } => {
                     self.others.insert(name.clone());
@@ -154,6 +190,12 @@ impl Declarations {
             self.types.entry(k.clone()).or_insert_with(|| v.clone());
         }
         self.others.extend(other.others.iter().cloned());
+        for (k, v) in &other.array_structs {
+            self.array_structs.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        for (k, v) in &other.modules {
+            self.modules.entry(k.clone()).or_insert_with(|| v.clone());
+        }
     }
 }
 
@@ -225,6 +267,21 @@ impl Scope<'_> {
     /// without its type (another language's), `None` unknown.
     fn global(&self, name: &str) -> Option<Option<&Global>> {
         self.all().find_map(|d| d.globals.get(name).map(Some).or_else(|| d.others.contains(name).then_some(None)))
+    }
+
+    /// Is `name` a struct `extends array`?
+    fn array_struct(&self, name: &str) -> bool {
+        self.all().any(|d| d.array_structs.contains_key(name))
+    }
+
+    /// Has the array struct `name` the method `m`, its own or a module's
+    /// it implements (through theirs too)?
+    fn array_struct_has(&self, name: &str, m: &str) -> bool {
+        fn has(scope: &Scope, members: &Members, m: &str, depth: usize) -> bool {
+            members.methods.contains(m)
+                || (depth < 8 && members.implements.iter().any(|i| scope.all().find_map(|d| d.modules.get(i)).is_some_and(|x| has(scope, x, m, depth + 1))))
+        }
+        self.all().find_map(|d| d.array_structs.get(name)).is_some_and(|x| has(self, x, m, 0))
     }
 
     fn type_known(&self, name: &str) -> bool {
@@ -312,7 +369,7 @@ impl Ty {
 pub fn check(program: &Program, env: &[&Declarations]) -> Vec<Diagnostic> {
     let own = Declarations::of(program);
     let scope = Scope { own: &own, env };
-    let mut c = Checker { scope, out: Vec::new(), locals: HashMap::new(), returns: None };
+    let mut c = Checker { scope, out: Vec::new(), locals: HashMap::new(), returns: None, current: None };
     c.items(&program.items);
     c.out.sort_by_key(|d| d.line);
     c.out
@@ -334,6 +391,9 @@ struct Checker<'a> {
     locals: HashMap<String, (String, bool)>,
     /// What the function being checked returns (`None`: nothing).
     returns: Option<Option<String>>,
+    /// vJASS: the struct whose method is being checked (`this`,
+    /// `thistype`).
+    current: Option<String>,
 }
 
 /// The span of `name` at the start of `span` (a call's, an array
@@ -353,6 +413,10 @@ impl Checker<'_> {
                 TopLevel::TypeDef { extends, line, .. } => self.type_name(extends, *line),
                 TopLevel::Library(l) => self.items(&l.items),
                 TopLevel::Struct(StructDecl { members, .. }) | TopLevel::Module(TypeDecl { members, .. }) | TopLevel::Interface(TypeDecl { members, .. }) => {
+                    self.current = match item {
+                        TopLevel::Struct(st) => Some(st.name.clone()),
+                        _ => None,
+                    };
                     for m in members {
                         match m {
                             StructMember::Field(g) => self.global(g),
@@ -363,6 +427,7 @@ impl Checker<'_> {
                             StructMember::Implement { .. } => {}
                         }
                     }
+                    self.current = None;
                 }
                 TopLevel::Stmt(_) | TopLevel::Zinc(_) | TopLevel::Keyword { .. } | TopLevel::Hook { .. } => {}
             }
@@ -644,6 +709,9 @@ impl Checker<'_> {
             }
             // vJASS: its parts checked, its type unknown here.
             ExprKind::Member(..) | ExprKind::MethodCall(..) | ExprKind::Index(..) => {
+                if let ExprKind::MethodCall(o, m, _) = &e.kind {
+                    self.array_struct_call(o, m, e);
+                }
                 for c in e.children() {
                     self.expr(c);
                 }
@@ -651,6 +719,33 @@ impl Checker<'_> {
             }
             ExprKind::This | ExprKind::ThisType | ExprKind::Super => None,
         }
+    }
+
+    /// `array-struct`: `S.allocate()`, `S.create()` without one of its own,
+    /// `x.destroy()`, `x.deallocate()` of a struct `extends array` (told by
+    /// its name, `thistype`, `this` in its methods, or a variable of its
+    /// type), unless a method of its own (or a module's) is so named.
+    fn array_struct_call(&mut self, o: &Expr, m: &str, e: &Expr) {
+        let (s, statics) = match &o.kind {
+            ExprKind::ThisType => (self.current.clone(), true),
+            ExprKind::This => (self.current.clone(), false),
+            ExprKind::Var(n) if self.locals.contains_key(n) => (Some(self.locals[n].0.clone()), false),
+            ExprKind::Var(n) if self.scope.array_struct(n) && !self.scope.all().any(|d| d.globals.contains_key(n)) => (Some(n.clone()), true),
+            ExprKind::Var(n) => (self.scope.global(n).flatten().filter(|g| !g.is_array).map(|g| g.type_name.clone()), false),
+            _ => (None, false),
+        };
+        let s = s.and_then(|s| if s == "thistype" { self.current.clone() } else { Some(s) });
+        let Some(s) = s.filter(|s| self.scope.array_struct(s)) else { return };
+        let refused = if statics { matches!(m, "allocate" | "create") } else { matches!(m, "destroy" | "deallocate") };
+        if !refused || self.scope.array_struct_has(&s, m) {
+            return;
+        }
+        let d = Diagnostic::error(
+            rule::ARRAY_STRUCT,
+            format!("{s}.{m}: {s} extends array, whose instances are never allocated or destroyed: an index is an instance ({s}[i]); a method `{m}` of its own if it needs one (JassHelper's manual, Array structs)"),
+            e.span.start_line,
+        );
+        self.push(d, Some(e.span));
     }
 
     fn binary(&mut self, op: BinOp, ta: Option<Ty>, tb: Option<Ty>, e: &Expr) -> Option<Ty> {

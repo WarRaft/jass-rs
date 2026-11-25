@@ -259,3 +259,54 @@ fn vjass_names_and_members() {
     let found: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
     assert_eq!(found, ["the function 'CreateTimer' is declared nowhere", "the function 'TimerStart' is declared nowhere"], "{found:#?}");
 }
+
+#[test]
+fn array_structs_as_the_manual_says() {
+    let src = "\
+module Alloc
+    static method allocate takes nothing returns thistype
+        return 1
+    endmethod
+endmodule
+struct P extends array
+    integer a = 5
+    integer array b[4]
+    static integer count = 0
+    method onDestroy takes nothing returns nothing
+    endmethod
+    method kill takes nothing returns nothing
+        call this.destroy()
+        call thistype.allocate()
+    endmethod
+endstruct
+struct Q extends array
+    implement Alloc
+    static method create takes nothing returns thistype
+        return thistype.allocate()
+    endmethod
+endstruct
+struct R
+endstruct
+function F takes nothing returns nothing
+    local P p = P.create()
+    local Q q = Q.create()
+    local R r = R.create()
+    call p.deallocate()
+    call r.destroy()
+    call P[2].sum()
+endfunction
+";
+    let prog = crate::Parser::parse_str_with(src, crate::Dialect::VJass).unwrap();
+    let mut said: Vec<(usize, String)> = crate::lint(&prog).into_iter().chain(check(&prog, &[])).filter(|d| d.rule == rule::ARRAY_STRUCT).map(|d| (d.line, d.message)).collect();
+    said.sort();
+    let lines: Vec<usize> = said.iter().map(|(l, _)| *l).collect();
+    // Q's allocate is its module's, its create its own; R isn't an array struct.
+    assert_eq!(lines, vec![7, 8, 10, 13, 14, 26, 29], "{said:?}");
+    assert!(said[0].1.contains("'a' can't have a default value"), "{said:?}");
+    assert!(said[1].1.contains("'b' can't be an array"), "{said:?}");
+    assert!(said[2].1.contains("onDestroy"), "{said:?}");
+    assert!(said[3].1.starts_with("P.destroy:"), "{said:?}");
+    assert!(said[4].1.starts_with("P.allocate:"), "{said:?}");
+    assert!(said[5].1.starts_with("P.create:"), "{said:?}");
+    assert!(said[6].1.starts_with("P.deallocate:"), "{said:?}");
+}

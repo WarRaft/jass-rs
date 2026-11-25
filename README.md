@@ -382,6 +382,14 @@ that takes arguments), and types:
 - `array-access`: an array without its index, an index of what isn't an
   array (an index is an integer).
 - `constant-assignment`: a constant set.
+- `array-struct` (vJASS, JassHelper's manual, Array structs): a struct
+  `extends array` has no instances allocated, so `lint` reports a
+  member's default value, an array member and `onDestroy`, and `names`
+  a call of `allocate`, of `create` not its own, of `destroy` or
+  `deallocate`, on the struct by its name, `thistype`, `this` in its
+  methods or a variable of its type, unless it (or a module it
+  implements, `Declarations::modules`) has a method so named
+  (`Declarations::array_structs`).
 
 `names::comment_of` is the comment written for a declaration: the `//`
 lines right above it (a rule line like `//=====` ends it: that's a
