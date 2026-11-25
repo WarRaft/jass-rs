@@ -697,6 +697,12 @@ impl Parser {
     fn debug_stmt(&mut self) -> Result<Stmt, ParseError> {
         let line = self.peek().line;
         self.expect(TokenKind::Keyword(Kw::Debug))?;
+        // vJASS: JassHelper takes a debug line out (or keeps it, in debug
+        // mode) whatever it is: `debug local ...`, `debug return ...`.
+        if self.vjass && !self.check(&TokenKind::Keyword(Kw::Debug)) {
+            let stmt = Box::new(self.stmt()?);
+            return Ok(Stmt::Debug { stmt, line });
+        }
         match self.peek_kind() {
             // A name: an assignment or a call, `set` or `call` left out.
             TokenKind::Ident(_)

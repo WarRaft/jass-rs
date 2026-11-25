@@ -599,6 +599,12 @@ fn vjass_as_real_libraries_write_it() {
     let TopLevel::Struct(s) = &p.items[0] else { panic!() };
     assert!(matches!(&s.members[0], StructMember::StaticIf { branches, else_branch: Some(e), .. } if branches[0].1.len() == 2 && e.len() == 1));
     assert_eq!(all_members(&s.members).len(), 3);
+    // Any statement after `debug` (a line JassHelper takes out); plain
+    // JASS's only before set, call, if and loop.
+    let p = v("function F takes nothing returns integer\n    debug local integer n = 1\n    debug return n\n    return 0\nendfunction\n");
+    let TopLevel::Function(f) = &p.items[0] else { panic!() };
+    assert!(matches!(&f.body[0], Stmt::Debug { stmt, .. } if matches!(&**stmt, Stmt::Local { .. })));
+    assert!(matches!(&f.body[1], Stmt::Debug { stmt, .. } if matches!(&**stmt, Stmt::Return { .. })));
     // A `debug if` a line at a time.
     let p = v("function F takes integer i returns nothing\n    debug if i < 0 then\n        debug call BJDebugMsg(\"low\")\n    debug else\n        debug call BJDebugMsg(\"ok\")\n    debug endif\nendfunction\n");
     let TopLevel::Function(f) = &p.items[0] else { panic!() };
