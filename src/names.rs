@@ -528,6 +528,10 @@ impl Checker<'_> {
         match self.scope.global(name) {
             Some(Some(g)) => Some(Var { ty: g.type_name.clone(), array: g.is_array, constant: g.constant }),
             Some(None) => None,
+            // vJASS: a function's name as a value is its pointer, for a
+            // function interface (`repeater3(2.0, double)`): no variable,
+            // and no type here.
+            None if self.scope.function(name).is_some() => None,
             None => {
                 self.unknown("the variable", name, line, span);
                 None

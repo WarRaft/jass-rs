@@ -371,3 +371,27 @@ endfunction
     let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
     assert!(said.is_empty(), "{said:?}");
 }
+
+#[test]
+fn a_function_where_a_function_interface_goes() {
+    let src = "\
+function interface realfunc takes real x returns real
+function double takes real x returns real
+    return 2 * x
+endfunction
+function repeater3 takes real x, realfunc F returns real
+    return x
+endfunction
+interface withpos
+    real x
+endinterface
+function test takes nothing returns nothing
+    local realfunc f = double
+    local real r = repeater3(2.0, double)
+    set f = double
+endfunction
+";
+    let prog = crate::Parser::parse_str_with(src, crate::Dialect::VJass).unwrap();
+    let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
+    assert!(said.is_empty(), "{said:?}");
+}
