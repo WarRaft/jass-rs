@@ -196,6 +196,9 @@ pub struct GlobalDecl {
     pub modifiers: Modifiers,
     /// vJASS: a sized array, `integer array a[100]`.
     pub size: Option<Expr>,
+    /// vJASS: a 2D array's height, `integer array a[10][20]` (its width
+    /// is `size`).
+    pub height: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -469,6 +469,14 @@ impl Parser {
         } else {
             None
         };
+        // vJASS: a 2D array, `integer array a[10][20]`.
+        let height = if size.is_some() && self.ts.eat(&TokenKind::Punct(Punct::LBracket)) {
+            let h = self.expr()?;
+            self.expect(TokenKind::Punct(Punct::RBracket))?;
+            Some(h)
+        } else {
+            None
+        };
         let initializer = if self.check(&TokenKind::Punct(Punct::Assign)) {
             self.advance();
             Some(self.expr()?)
@@ -484,6 +492,7 @@ impl Parser {
             line,
             modifiers: Modifiers::default(),
             size,
+            height,
         })
     }
 
@@ -767,6 +776,20 @@ impl Parser {
         } else {
             None
         };
+        // vJASS: `a[i][j] = v`, an element of `a[i]` (a 2D array's, a
+        // dynamic array's): set as a member's element is.
+        if let Some(i) = &index
+            && self.check(&TokenKind::Punct(Punct::LBracket))
+        {
+            self.advance();
+            let j = self.expr()?;
+            let close = self.expect(TokenKind::Punct(Punct::RBracket))?;
+            self.expect(TokenKind::Punct(Punct::Assign))?;
+            let value = self.expr()?;
+            let span = Span::new(line, 0, close.line, close.end_col);
+            let target = Expr::new(ExprKind::ArrayAccess(name, Box::new(i.clone())), span);
+            return Ok(Stmt::SetMember { target, index: Some(j), value, line, keyword });
+        }
         self.expect(TokenKind::Punct(Punct::Assign))?;
         let value = self.expr()?;
         Ok(Stmt::Set {
@@ -1011,7 +1034,7 @@ impl Parser {
                     let span = Span::new(e.span.start_line, e.span.start_col, tok.line, tok.end_col);
                     e = Expr::new(ExprKind::Member(Box::new(e), name), span);
                 }
-            } else if matches!(e.kind, ExprKind::Member(..) | ExprKind::MethodCall(..) | ExprKind::Index(..)) && self.check(&TokenKind::Punct(Punct::LBracket)) {
+            } else if matches!(e.kind, ExprKind::Member(..) | ExprKind::MethodCall(..) | ExprKind::Index(..) | ExprKind::ArrayAccess(..)) && self.check(&TokenKind::Punct(Punct::LBracket)) {
                 self.advance();
                 let index = self.expr()?;
                 let close = self.expect(TokenKind::Punct(Punct::RBracket))?;

@@ -730,6 +730,14 @@ impl Checker<'_> {
                 let (ta, tb) = (self.expr(a), self.expr(b));
                 self.binary(*op, ta, tb, e)
             }
+            // vJASS: a sized array's `.size`, a 2D one's `.width` and
+            // `.height`: integers, the array named without its index.
+            ExprKind::Member(o, f)
+                if matches!(f.as_str(), "size" | "width" | "height")
+                    && matches!(&o.kind, ExprKind::Var(n) if self.locals.get(n).map(|l| l.1).or_else(|| self.scope.global(n).flatten().map(|g| g.is_array)) == Some(true)) =>
+            {
+                Some(Ty::of("integer"))
+            }
             // vJASS: its parts checked, its type unknown here.
             ExprKind::Member(..) | ExprKind::MethodCall(..) | ExprKind::Index(..) => {
                 if let ExprKind::MethodCall(o, m, _) = &e.kind {

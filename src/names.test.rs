@@ -395,3 +395,22 @@ endfunction
     let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
     assert!(said.is_empty(), "{said:?}");
 }
+
+#[test]
+fn sized_and_2d_arrays() {
+    let src = "\
+globals
+    constant integer W = 100
+    integer array mat1[10][20]
+    integer array mat2[W][200]
+    integer array myArray[500]
+endglobals
+function test takes nothing returns nothing
+    local integer i = mat1.width + mat1.height + mat2.size + myArray.size
+    set mat1[i][2] = mat1[0][1] + 1
+endfunction
+";
+    let prog = crate::Parser::parse_str_with(src, crate::Dialect::VJass).unwrap();
+    let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
+    assert!(said.is_empty(), "{said:?}");
+}
