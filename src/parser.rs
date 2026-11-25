@@ -175,12 +175,12 @@ impl Parser {
             TokenKind::Keyword(Kw::Library | Kw::LibraryOnce | Kw::Scope) => self.library(),
             TokenKind::Keyword(Kw::Struct) => self.struct_decl(modifiers, line),
             TokenKind::Keyword(Kw::Interface) => {
-                let (name, members, end_line) = self.type_body(Kw::Interface, Kw::EndInterface)?;
-                Ok(TopLevel::Interface(TypeDecl { modifiers, name, members, line, end_line }))
+                let (name, size, members, end_line) = self.type_body(Kw::Interface, Kw::EndInterface)?;
+                Ok(TopLevel::Interface(TypeDecl { modifiers, name, size, members, line, end_line }))
             }
             TokenKind::Keyword(Kw::Module) => {
-                let (name, members, end_line) = self.type_body(Kw::Module, Kw::EndModule)?;
-                Ok(TopLevel::Module(TypeDecl { modifiers, name, members, line, end_line }))
+                let (name, size, members, end_line) = self.type_body(Kw::Module, Kw::EndModule)?;
+                Ok(TopLevel::Module(TypeDecl { modifiers, name, size, members, line, end_line }))
             }
             TokenKind::Keyword(Kw::Keyword) => {
                 self.advance();
@@ -262,8 +262,18 @@ impl Parser {
         } else {
             None
         };
+        let mut size = size;
         let extends = if self.ts.eat(&TokenKind::Keyword(Kw::Extends)) {
-            if self.ts.eat(&TokenKind::Keyword(Kw::Array)) { Some("array".to_string()) } else { Some(self.expect_identifier()?) }
+            if self.ts.eat(&TokenKind::Keyword(Kw::Array)) {
+                // `extends array [20000]`: an array struct's index space.
+                if self.ts.eat(&TokenKind::Punct(Punct::LBracket)) {
+                    size = Some(self.expr()?);
+                    self.expect(TokenKind::Punct(Punct::RBracket))?;
+                }
+                Some("array".to_string())
+            } else {
+                Some(self.expect_identifier()?)
+            }
         } else {
             None
         };
@@ -273,12 +283,20 @@ impl Parser {
     }
 
     /// An interface's or a module's name, members and end line.
-    fn type_body(&mut self, open: Kw, end: Kw) -> Result<(String, Vec<StructMember>, usize), ParseError> {
+    fn type_body(&mut self, open: Kw, end: Kw) -> Result<(String, Option<Expr>, Vec<StructMember>, usize), ParseError> {
         self.expect(TokenKind::Keyword(open))?;
         let name = self.expect_identifier()?;
+        // `interface A[20000]`: its index space.
+        let size = if self.ts.eat(&TokenKind::Punct(Punct::LBracket)) {
+            let size = self.expr()?;
+            self.expect(TokenKind::Punct(Punct::RBracket))?;
+            Some(size)
+        } else {
+            None
+        };
         let members = self.members(end)?;
         let end_line = self.advance().line;
-        Ok((name, members, end_line))
+        Ok((name, size, members, end_line))
     }
 
     /// A struct's, interface's or module's members, up to `end`.

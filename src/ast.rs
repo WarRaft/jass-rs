@@ -138,6 +138,8 @@ pub struct StructDecl {
 pub struct TypeDecl {
     pub modifiers: Modifiers,
     pub name: String,
+    /// An interface's index space (`interface A[20000]`).
+    pub size: Option<Expr>,
     pub members: Vec<StructMember>,
     pub line: usize,
     pub end_line: usize,
