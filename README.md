@@ -389,7 +389,10 @@ that takes arguments), and types:
   `deallocate`, on the struct by its name, `thistype`, `this` in its
   methods or a variable of its type, unless it (or a module it
   implements, `Declarations::modules`) has a method so named
-  (`Declarations::array_structs`).
+  (`Declarations::array_structs`); and at each `implement`, what the
+  module (and the modules it implements, in any file of the project)
+  would give it that it can't have. The messages say what's wrong in
+  their own words (`array_struct`, which `wc3-build` says too).
 
 `names::comment_of` is the comment written for a declaration: the `//`
 lines right above it (a rule line like `//=====` ends it: that's a

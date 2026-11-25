@@ -51,24 +51,24 @@ fn lint_items(items: &[TopLevel], diags: &mut Vec<Diagnostic>) {
     }
 }
 
-/// What JassHelper's manual says a struct `extends array` can't have
-/// (Array structs): its instances are never allocated, so a member has no
-/// default value, isn't an array, and there's no `onDestroy`. A static
-/// member's value is a global's: allowed.
+/// What a struct `extends array` can't have of its own (`array-struct`;
+/// what its modules give it is `names`'s, which sees them): a member's
+/// default value, an array member, `onDestroy`. A static member's value is
+/// a global's: allowed.
 fn check_array_struct(st: &StructDecl, diags: &mut Vec<Diagnostic>) {
-    let why = "an array struct's instances are never allocated (JassHelper's manual, Array structs)";
+    use crate::array_struct as says;
     for m in &st.members {
         match m {
             StructMember::Field(g) if !g.modifiers.is_static => {
                 if g.initializer.is_some() {
-                    diags.push(Diagnostic::error(rule::ARRAY_STRUCT, format!("{} extends array: its member '{}' can't have a default value, it's zero, null or false: {why}", st.name, g.name), g.line));
+                    diags.push(Diagnostic::error(rule::ARRAY_STRUCT, says::default_value(&st.name, &g.name, None), g.line));
                 }
                 if g.is_array {
-                    diags.push(Diagnostic::error(rule::ARRAY_STRUCT, format!("{} extends array: its member '{}' can't be an array: {why}", st.name, g.name), g.line));
+                    diags.push(Diagnostic::error(rule::ARRAY_STRUCT, says::array_member(&st.name, &g.name, None), g.line));
                 }
             }
             StructMember::Method(me) if !me.sig.modifiers.is_static && me.sig.name == "onDestroy" => {
-                diags.push(Diagnostic::error(rule::ARRAY_STRUCT, format!("{} extends array: it can't have onDestroy, nothing destroys its instances: {why}", st.name), me.sig.line));
+                diags.push(Diagnostic::error(rule::ARRAY_STRUCT, says::on_destroy(&st.name, None), me.sig.line));
             }
             _ => {}
         }

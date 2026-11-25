@@ -305,8 +305,44 @@ endfunction
     assert!(said[0].1.contains("'a' can't have a default value"), "{said:?}");
     assert!(said[1].1.contains("'b' can't be an array"), "{said:?}");
     assert!(said[2].1.contains("onDestroy"), "{said:?}");
-    assert!(said[3].1.starts_with("P.destroy:"), "{said:?}");
+    assert!(said[3].1.starts_with("P.destroy: P extends array, so it has no destroy."), "{said:?}");
     assert!(said[4].1.starts_with("P.allocate:"), "{said:?}");
     assert!(said[5].1.starts_with("P.create:"), "{said:?}");
     assert!(said[6].1.starts_with("P.deallocate:"), "{said:?}");
+}
+
+#[test]
+fn an_array_structs_modules() {
+    let module = "\
+module Counted
+    integer made = 0
+    integer array marks[2]
+    implement Cleaned
+endmodule
+";
+    let other = "\
+module Cleaned
+    method onDestroy takes nothing returns nothing
+    endmethod
+endmodule
+";
+    let src = "\
+struct P extends array
+    implement Counted
+endstruct
+struct Q
+    implement Counted
+endstruct
+";
+    let parse = |t: &str| crate::Parser::parse_str_with(t, crate::Dialect::VJass).unwrap();
+    // The modules in other files: what they give P is said at its implement.
+    let (m1, m2) = (Declarations::of(&parse(module)), Declarations::of(&parse(other)));
+    let said: Vec<(usize, String)> = check(&parse(src), &[&m1, &m2]).into_iter().filter(|d| d.rule == rule::ARRAY_STRUCT).map(|d| (d.line, d.message)).collect();
+    assert_eq!(said.len(), 3, "{said:?}");
+    assert!(said.iter().all(|(l, _)| *l == 2), "{said:?}");
+    assert!(said.iter().any(|(_, m)| m.starts_with("P extends array: its member 'made' (from module Counted) can't have a default value.")), "{said:?}");
+    assert!(said.iter().any(|(_, m)| m.starts_with("P extends array: its member 'marks' (from module Counted) can't be an array.")), "{said:?}");
+    assert!(said.iter().any(|(_, m)| m.starts_with("P extends array: onDestroy (from module Cleaned) would never run.")), "{said:?}");
+    // Nothing of the manual: the error says what's wrong itself.
+    assert!(!said.iter().any(|(_, m)| m.contains("manual")), "{said:?}");
 }

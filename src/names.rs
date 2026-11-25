@@ -77,12 +77,16 @@ pub struct Declarations {
     pub modules: HashMap<String, Members>,
 }
 
-/// A vJASS struct's or module's methods (static or not) and the modules
-/// it implements.
+/// A vJASS struct's or module's methods (static or not), the modules it
+/// implements, and what an array struct can't take of it: its instance
+/// members with a default value or an array, its `onDestroy`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Members {
     pub methods: HashSet<String>,
     pub implements: Vec<String>,
+    /// Instance members: name, has a default value, is an array.
+    pub fields: Vec<(String, bool, bool)>,
+    pub on_destroy: bool,
 }
 
 impl Members {
@@ -92,8 +96,10 @@ impl Members {
             match x {
                 StructMember::Method(me) => {
                     m.methods.insert(me.sig.name.clone());
+                    m.on_destroy |= !me.sig.modifiers.is_static && me.sig.name == "onDestroy";
                 }
                 StructMember::Implement { name, .. } => m.implements.push(name.clone()),
+                StructMember::Field(g) if !g.modifiers.is_static => m.fields.push((g.name.clone(), g.initializer.is_some(), g.is_array)),
                 StructMember::Field(_) => {}
             }
         }
@@ -417,6 +423,11 @@ impl Checker<'_> {
                         TopLevel::Struct(st) => Some(st.name.clone()),
                         _ => None,
                     };
+                    if let TopLevel::Struct(st) = item
+                        && st.extends.as_deref() == Some("array")
+                    {
+                        self.array_struct_modules(st);
+                    }
                     for m in members {
                         match m {
                             StructMember::Field(g) => self.global(g),
@@ -740,12 +751,38 @@ impl Checker<'_> {
         if !refused || self.scope.array_struct_has(&s, m) {
             return;
         }
-        let d = Diagnostic::error(
-            rule::ARRAY_STRUCT,
-            format!("{s}.{m}: {s} extends array, whose instances are never allocated or destroyed: an index is an instance ({s}[i]); a method `{m}` of its own if it needs one (JassHelper's manual, Array structs)"),
-            e.span.start_line,
-        );
+        let d = Diagnostic::error(rule::ARRAY_STRUCT, crate::array_struct::call(&s, m), e.span.start_line);
         self.push(d, Some(e.span));
+    }
+
+    /// `array-struct`: what the modules an array struct implements (and
+    /// theirs) would give it that it can't have, at each `implement`.
+    fn array_struct_modules(&mut self, st: &StructDecl) {
+        use crate::array_struct as says;
+        for m in &st.members {
+            let StructMember::Implement { name, line, .. } = m else { continue };
+            // The module, the modules it implements ... each once.
+            let mut queue = vec![name.clone()];
+            let mut seen = HashSet::new();
+            while let Some(module) = queue.pop() {
+                if !seen.insert(module.clone()) || seen.len() > 16 {
+                    continue;
+                }
+                let Some(x) = self.scope.all().find_map(|d| d.modules.get(&module)).cloned() else { continue };
+                for (field, init, array) in &x.fields {
+                    if *init {
+                        self.push(Diagnostic::error(rule::ARRAY_STRUCT, says::default_value(&st.name, field, Some(&module)), *line), None);
+                    }
+                    if *array {
+                        self.push(Diagnostic::error(rule::ARRAY_STRUCT, says::array_member(&st.name, field, Some(&module)), *line), None);
+                    }
+                }
+                if x.on_destroy {
+                    self.push(Diagnostic::error(rule::ARRAY_STRUCT, says::on_destroy(&st.name, Some(&module)), *line), None);
+                }
+                queue.extend(x.implements.iter().cloned());
+            }
+        }
     }
 
     fn binary(&mut self, op: BinOp, ta: Option<Ty>, tb: Option<Ty>, e: &Expr) -> Option<Ty> {

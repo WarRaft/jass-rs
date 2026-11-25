@@ -1,3 +1,4 @@
+pub mod array_struct;
 pub mod ast;
 pub mod html;
 pub mod lexer;
