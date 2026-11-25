@@ -605,6 +605,11 @@ fn vjass_as_real_libraries_write_it() {
     let TopLevel::Function(f) = &p.items[0] else { panic!() };
     assert!(matches!(&f.body[0], Stmt::Debug { stmt, .. } if matches!(&**stmt, Stmt::Local { .. })));
     assert!(matches!(&f.body[1], Stmt::Debug { stmt, .. } if matches!(&**stmt, Stmt::Return { .. })));
+    // An element of a cast set: its `[]=`.
+    let p = v("struct Table\n    method operator [] takes integer index returns Table\n        set Table(this)[index] = 1\n        return 0\n    endmethod\nendstruct\n");
+    let TopLevel::Struct(s) = &p.items[0] else { panic!() };
+    let StructMember::Method(m) = &s.members[0] else { panic!() };
+    assert!(matches!(&m.body.as_ref().unwrap()[0], Stmt::SetMember { target, index: Some(_), .. } if matches!(target.kind, ExprKind::Call(..))));
     // A `debug if` a line at a time.
     let p = v("function F takes integer i returns nothing\n    debug if i < 0 then\n        debug call BJDebugMsg(\"low\")\n    debug else\n        debug call BJDebugMsg(\"ok\")\n    debug endif\nendfunction\n");
     let TopLevel::Function(f) = &p.items[0] else { panic!() };

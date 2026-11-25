@@ -793,7 +793,10 @@ impl Parser {
                             TokenKind::Punct(p) if *p == close => {
                                 depth -= 1;
                                 if depth == 0 {
-                                    return matches!(self.ts.nth_kind(i + 1), TokenKind::Punct(Punct::Dot));
+                                    // `S(x)[i] = v` too: a cast's element (its `[]=`).
+                                    let cast = open == Punct::LParen;
+                                    return matches!(self.ts.nth_kind(i + 1), TokenKind::Punct(Punct::Dot))
+                                        || (cast && matches!(self.ts.nth_kind(i + 1), TokenKind::Punct(Punct::LBracket)));
                                 }
                             }
                             TokenKind::Eof => return false,
@@ -821,6 +824,10 @@ impl Parser {
                 }
                 ExprKind::Var(name) => Ok(Stmt::Set { name, index: None, value, line, keyword }),
                 ExprKind::ArrayAccess(name, index) => Ok(Stmt::Set { name, index: Some(*index), value, line, keyword }),
+                // An element of what isn't a name: a cast's (`Table(this)[i]`).
+                ExprKind::Index(of, index) if matches!(of.kind, ExprKind::Call(..) | ExprKind::MethodCall(..) | ExprKind::Index(..)) => {
+                    Ok(Stmt::SetMember { target: *of, index: Some(*index), value, line, keyword })
+                }
                 _ => Err(self.error("only a name, a member or an element of one can be set")),
             };
         }
