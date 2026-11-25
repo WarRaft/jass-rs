@@ -53,6 +53,7 @@ fn top_level_node(item: &TopLevel) -> Node {
             line,
             size,
             modifiers,
+            ..
         } => {
             let label = format!("{}Type {name} extends {extends}{} (line {line})", access(modifiers), if size.is_some() { " array" } else { "" });
             Node::with_children(label, size.iter().map(expr_node).collect()).tag("decl", Some(Span::whole_line(*line)))

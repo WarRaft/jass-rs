@@ -414,3 +414,38 @@ endfunction
     let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
     assert!(said.is_empty(), "{said:?}");
 }
+
+#[test]
+fn dynamic_arrays_are_indexed() {
+    let src = "\
+type arsample extends integer array[8]
+type iar extends integer array[3]
+type iar_ar extends iar array[3]
+function test takes nothing returns integer
+    local arsample r = arsample.create()
+    local iar_ar m = iar_ar.create()
+    set r[1] = r[0] + arsample.size
+    set m[0] = iar.create()
+    set m[0][1] = 2
+    return r[1]
+endfunction
+";
+    let prog = crate::Parser::parse_str_with(src, crate::Dialect::VJass).unwrap();
+    let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
+    assert!(said.is_empty(), "{said:?}");
+}
+
+#[test]
+fn casts_of_vjass_types() {
+    let src = "\
+type anarrayofdata extends integer array [6]
+struct S
+endstruct
+function getdata5 takes integer u returns integer
+    return anarrayofdata(u)[5] + integer(S(u))
+endfunction
+";
+    let prog = crate::Parser::parse_str_with(src, crate::Dialect::VJass).unwrap();
+    let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
+    assert!(said.is_empty(), "{said:?}");
+}

@@ -7,6 +7,8 @@ pub use parser_rs::ParseError;
 
 pub struct Parser {
     ts: TokenStream<TokenKind>,
+    /// vJASS: what only it writes is read (`a[i][j]`, `T(x)[i]`).
+    vjass: bool,
 }
 
 impl TokenParser for Parser {
@@ -21,6 +23,7 @@ impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Parser {
             ts: TokenStream::new(tokens),
+            vjass: false,
         }
     }
 
@@ -31,7 +34,9 @@ impl Parser {
     pub fn parse_str_with(src: &str, dialect: Dialect) -> Result<Program, ParseError> {
         // A textmacro's or novjass's block isn't code of its place.
         let tokens = Lexer::tokenize_with(src, dialect)?.into_iter().filter(|t| !matches!(&t.kind, TokenKind::Embedded(b) if b.lang != "zinc")).collect();
-        Parser::new(tokens).program()
+        let mut p = Parser::new(tokens);
+        p.vjass = dialect == Dialect::VJass;
+        p.program()
     }
 
     fn peek(&self) -> &Token {
@@ -404,19 +409,22 @@ impl Parser {
         self.expect(TokenKind::Keyword(Kw::Extends))?;
         let extends = self.expect_type_name()?;
         // vJASS: `extends integer array [16]`.
-        let size = if self.ts.eat(&TokenKind::Keyword(Kw::Array)) {
+        let (size, space) = if self.ts.eat(&TokenKind::Keyword(Kw::Array)) {
             self.expect(TokenKind::Punct(Punct::LBracket))?;
             let size = self.expr()?;
+            // `[200, 40000]`: its storage space.
+            let space = if self.ts.eat(&TokenKind::Punct(Punct::Comma)) { Some(self.expr()?) } else { None };
             self.expect(TokenKind::Punct(Punct::RBracket))?;
-            Some(size)
+            (Some(size), space)
         } else {
-            None
+            (None, None)
         };
         Ok(TopLevel::TypeDef {
             name,
             extends,
             line,
             size,
+            space,
             modifiers,
         })
     }
@@ -779,6 +787,7 @@ impl Parser {
         // vJASS: `a[i][j] = v`, an element of `a[i]` (a 2D array's, a
         // dynamic array's): set as a member's element is.
         if let Some(i) = &index
+            && self.vjass
             && self.check(&TokenKind::Punct(Punct::LBracket))
         {
             self.advance();
@@ -1034,7 +1043,11 @@ impl Parser {
                     let span = Span::new(e.span.start_line, e.span.start_col, tok.line, tok.end_col);
                     e = Expr::new(ExprKind::Member(Box::new(e), name), span);
                 }
-            } else if matches!(e.kind, ExprKind::Member(..) | ExprKind::MethodCall(..) | ExprKind::Index(..) | ExprKind::ArrayAccess(..)) && self.check(&TokenKind::Punct(Punct::LBracket)) {
+            } else if (matches!(e.kind, ExprKind::Member(..) | ExprKind::MethodCall(..) | ExprKind::Index(..))
+                // vJASS: `a[i][j]`, `T(x)[i]`.
+                || (self.vjass && matches!(e.kind, ExprKind::ArrayAccess(..) | ExprKind::Call(..))))
+                && self.check(&TokenKind::Punct(Punct::LBracket))
+            {
                 self.advance();
                 let index = self.expr()?;
                 let close = self.expect(TokenKind::Punct(Punct::RBracket))?;

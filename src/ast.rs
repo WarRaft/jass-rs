@@ -19,6 +19,8 @@ pub enum TopLevel {
         /// vJASS's dynamic array type, `type T extends integer array [16]`:
         /// its size.
         size: Option<Expr>,
+        /// Its storage space, `[200, 40000]`.
+        space: Option<Expr>,
         modifiers: Modifiers,
     },
     Native(FunctionSig),

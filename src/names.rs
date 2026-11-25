@@ -75,6 +75,9 @@ pub struct Declarations {
     pub array_structs: HashMap<String, Members>,
     /// vJASS: each module, what it gives a struct that implements it.
     pub modules: HashMap<String, Members>,
+    /// vJASS: each dynamic array type (`type T extends E array [8]`), its
+    /// elements' type.
+    pub dynamic: HashMap<String, String>,
 }
 
 /// A vJASS struct's or module's methods (static or not), the modules it
@@ -164,6 +167,10 @@ impl Declarations {
                     self.modules.entry(m.name.clone()).or_insert_with(|| Members::of(&m.members));
                     self.others.insert(m.name.clone());
                 }
+                TopLevel::TypeDef { name, extends, size: Some(_), .. } => {
+                    self.dynamic.insert(name.clone(), extends.clone());
+                    self.others.insert(name.clone());
+                }
                 TopLevel::TypeDef { name, .. }
                 | TopLevel::Interface(TypeDecl { name, .. })
                 | TopLevel::FunctionInterface(FunctionSig { name, .. })
@@ -209,6 +216,9 @@ impl Declarations {
         }
         for (k, v) in &other.modules {
             self.modules.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        for (k, v) in &other.dynamic {
+            self.dynamic.entry(k.clone()).or_insert_with(|| v.clone());
         }
     }
 }
@@ -281,6 +291,17 @@ impl Scope<'_> {
     /// without its type (another language's), `None` unknown.
     fn global(&self, name: &str) -> Option<Option<&Global>> {
         self.all().find_map(|d| d.globals.get(name).map(Some).or_else(|| d.others.contains(name).then_some(None)))
+    }
+
+    /// An index of a value of type `ty` that's no array: a dynamic array
+    /// type's element (`Some(Some(_))`), or (a vJASS type known without
+    /// its own: a struct's `operator []`) one with no type here
+    /// (`Some(None)`); `None` for a type nothing indexes.
+    fn element_of(&self, ty: &str) -> Option<Option<String>> {
+        if let Some(e) = self.all().find_map(|d| d.dynamic.get(ty)) {
+            return Some(Some(e.clone()));
+        }
+        (ty == "thistype" || self.all().any(|d| d.others.contains(ty))).then_some(None)
     }
 
     /// Is `name` a struct `extends array`?
@@ -547,9 +568,13 @@ impl Checker<'_> {
 
     fn call(&mut self, name: &str, args: &[Expr], line: usize, span: Option<Span>) -> Option<Ty> {
         let types: Vec<Option<Ty>> = args.iter().map(|a| self.expr(a)).collect();
-        // vJASS: `thistype(x)`, a cast.
+        // vJASS: `thistype(x)`, a cast; `integer(x)`, a struct's or a
+        // dynamic array's number.
         if name == "thistype" {
             return None;
+        }
+        if name == "integer" && args.len() == 1 {
+            return Some(Ty::of("integer"));
         }
         let sig = match self.scope.function(name) {
             None => {
@@ -608,7 +633,12 @@ impl Checker<'_> {
                 }
                 match (var.array, index.is_some()) {
                     (true, false) => self.array(format!("'{name}' is an array: it's set by an index ({name}[i] = ...)"), *line, None),
-                    (false, true) => self.array(format!("'{name}' isn't an array: it has no index"), *line, None),
+                    // vJASS: an element of a dynamic array, or a struct's `[]=`.
+                    (false, true) => match self.scope.element_of(&var.ty) {
+                        Some(Some(e)) => self.expect(ty, &e, || format!("the value set to an element of '{name}'"), *line, Some(value.span)),
+                        Some(None) => {}
+                        None => self.array(format!("'{name}' isn't an array: it has no index"), *line, None),
+                    },
                     _ => self.expect(ty, &var.ty, || format!("the value set to '{name}'"), *line, Some(value.span)),
                 }
             }
@@ -687,8 +717,14 @@ impl Checker<'_> {
                 self.index(index);
                 let var = var?;
                 if !var.array {
-                    self.array(format!("'{name}' isn't an array: it has no index"), line, Some(name_span(e.span, name)));
-                    return None;
+                    // vJASS: an element of a dynamic array, or a struct's `[]`.
+                    return match self.scope.element_of(&var.ty) {
+                        Some(e) => e.map(Ty::Is),
+                        None => {
+                            self.array(format!("'{name}' isn't an array: it has no index"), line, Some(name_span(e.span, name)));
+                            None
+                        }
+                    };
                 }
                 Some(Ty::Is(var.ty))
             }
