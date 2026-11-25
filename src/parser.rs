@@ -466,7 +466,7 @@ impl Parser {
         } else {
             false
         };
-        let name = self.expect_identifier()?;
+        let name = if member { self.member_name()? } else { self.expect_identifier()? };
         // vJASS: a member `integer a[2]` is an array of 2.
         let is_array = is_array || (member && self.check(&TokenKind::Punct(Punct::LBracket)));
         // vJASS: a sized array, `integer array a[100]`.
@@ -1028,12 +1028,21 @@ impl Parser {
         }
     }
 
+    /// A member's name: a name, or `this` (JassHelper's manual names a
+    /// member so: after a `.` it's no instance).
+    fn member_name(&mut self) -> Result<String, ParseError> {
+        if self.ts.eat(&TokenKind::Keyword(Kw::This)) {
+            return Ok("this".into());
+        }
+        self.expect_identifier()
+    }
+
     /// vJASS: what follows an operand: `.name`, `.name(args)`, `[index]`.
     fn postfix(&mut self, mut e: Expr) -> Result<Expr, ParseError> {
         loop {
             if self.ts.eat(&TokenKind::Punct(Punct::Dot)) {
                 let tok = self.peek().clone();
-                let name = self.expect_identifier()?;
+                let name = self.member_name()?;
                 if self.ts.eat(&TokenKind::Punct(Punct::LParen)) {
                     let args = self.expr_list(&TokenKind::Punct(Punct::RParen))?;
                     let close = self.expect(TokenKind::Punct(Punct::RParen))?;
