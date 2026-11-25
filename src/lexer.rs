@@ -93,6 +93,17 @@ pub const NOVJASS_EMBED: EmbedSpec = EmbedSpec {
     prefix: false,
 };
 
+/// An `//! inject main` (`config`) ... `//! endinject` block: the lines
+/// JassHelper puts in place of the map's `main` (`config`); the build reads
+/// them as a function (`wc3-build`'s `preprocess`). One token, skipped by
+/// the parser, as a statement of it isn't one outside a function.
+pub const INJECT_EMBED: EmbedSpec = EmbedSpec {
+    lang: "inject",
+    open: "//! inject",
+    close: "//! endinject",
+    prefix: true,
+};
+
 /// The vJASS dialect: JASS plus vJASS keywords, `/* */` comments and
 /// embedded Zinc blocks. Same tokens, same parser; only the active
 /// vocabulary differs. vJASS's own constructs (`library`, `struct`, ...)
@@ -102,7 +113,7 @@ pub const VJASS_SPEC: LexSpec = LexSpec {
     block_comment: Some(("/*", "*/")),
     // JassHelper's: `/* a /* b */ c */` is one comment.
     nested_block_comments: true,
-    embeds: &[ZINC_EMBED, TEXTMACRO_EMBED, NOVJASS_EMBED],
+    embeds: &[ZINC_EMBED, TEXTMACRO_EMBED, NOVJASS_EMBED, INJECT_EMBED],
     puncts: VJASS_PUNCTS,
     ..SPEC
 };

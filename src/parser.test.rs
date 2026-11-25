@@ -549,3 +549,10 @@ fn the_manuals_syntax() {
     let StructMember::Field(b) = &s.members[1] else { panic!() };
     assert!(!b.is_array, "{b:?}");
 }
+
+#[test]
+fn an_inject_block_isnt_top_level_code() {
+    let p = vjass("//! inject main\n    call InitBlizzard()\n    //! dovjassinit\n//! endinject\nfunction F takes nothing returns nothing\nendfunction\n");
+    assert!(matches!(p.items.as_slice(), [TopLevel::Function(_)]), "{:?}", p.items);
+    assert!(crate::lint(&p).is_empty());
+}
