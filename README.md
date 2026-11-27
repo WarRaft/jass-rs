@@ -380,7 +380,12 @@ environment the caller gives (the game's `common.j` and `Blizzard.j`, the
 project's other files: this crate reads no files), and reports
 `unknown-name` (a function, variable or type declared nowhere),
 `argument-count` (a call of the wrong arity, a code value of a function
-that takes arguments), and types:
+that takes arguments), and types. `names::check_with_strings` also
+gives every string literal passed to a function the names resolve to
+(`StringArgument`: its text and span inside the quotes, the function,
+the argument's number, what the function returns), for a consumer that
+knows what such strings mean (the editor: a function returning a
+`framehandle`, its strings to frames):
 
 - `type-mismatch`: a value of the wrong type, as an argument, a value set
   or returned (or returned by a function that returns nothing), a
