@@ -355,6 +355,12 @@ function or `S.m`): `TopLevel::Hook`.
 
 ## Strict and extended JASS
 
+**Planned:** `Dialect` chosen by the language sections of `wc3.bni` and
+a file's header (`[jass] strict`, `[vjass] enable`, `// @vjass.enable=0`)
+in place of `[jass] dialect=` and `// @dialect`, which go away (no
+compatibility kept at version 0); cJass's features as switches over any
+dialect: see the [`wc3-rs` README](../wc3-rs/README.md#languages).
+
 Two tasks need two readings. A map that's built must run, so what the
 game would reject has to be found in it; and the sources a map is built
 of are written as their authors prefer. Here **the build is the main
