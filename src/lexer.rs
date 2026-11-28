@@ -1,9 +1,16 @@
 use crate::token::{JASS_KEYWORDS, Token, VJASS_KEYWORDS};
 use parser_rs::{EmbedSpec, LexSpec, NumberSpec, ParseError, Punct};
 
-/// JASS's lexical rules for the shared [`parser_rs::lexer`]: `//` comments
-/// only, rawcodes, and JASS's small operator set.
+/// Extended JASS's lexical rules for the shared [`parser_rs::lexer`]: `//`
+/// comments only, rawcodes, JASS's small operator set and the extended
+/// one's (`!`, `&&`, `||`, `+=`, `-=`; see [`Dialect::Jass`]).
 pub const SPEC: LexSpec = LexSpec {
+    puncts: EXTENDED_PUNCTS,
+    ..STRICT_SPEC
+};
+
+/// Strict JASS's: exactly the game's tokens (see [`Dialect::Strict`]).
+pub const STRICT_SPEC: LexSpec = LexSpec {
     keywords: JASS_KEYWORDS,
     // JASS reals may start or end with the dot: `.5`, `2144.`; hex may
     // be `$1F`; a leading 0 is octal: `017`.
@@ -40,7 +47,34 @@ const JASS_PUNCTS: &[Punct] = &[
     Punct::Comma,
 ];
 
-/// vJASS's: JASS's and `.` (members).
+/// Extended JASS's: the game's, and `!` (`not`), `&&` (`and`), `||`
+/// (`or`), `+=` and `-=` (in `set`). No program of the game's reads
+/// otherwise with them.
+const EXTENDED_PUNCTS: &[Punct] = &[
+    Punct::Plus,
+    Punct::Minus,
+    Punct::Star,
+    Punct::Slash,
+    Punct::EqEq,
+    Punct::NotEq,
+    Punct::Gt,
+    Punct::Lt,
+    Punct::GtEq,
+    Punct::LtEq,
+    Punct::Assign,
+    Punct::LParen,
+    Punct::RParen,
+    Punct::LBracket,
+    Punct::RBracket,
+    Punct::Comma,
+    Punct::Bang,
+    Punct::AndAnd,
+    Punct::OrOr,
+    Punct::PlusAssign,
+    Punct::MinusAssign,
+];
+
+/// vJASS's: extended JASS's and `.` (members).
 const VJASS_PUNCTS: &[Punct] = &[
     Punct::Plus,
     Punct::Minus,
@@ -58,6 +92,11 @@ const VJASS_PUNCTS: &[Punct] = &[
     Punct::LBracket,
     Punct::RBracket,
     Punct::Comma,
+    Punct::Bang,
+    Punct::AndAnd,
+    Punct::OrOr,
+    Punct::PlusAssign,
+    Punct::MinusAssign,
     Punct::Dot,
     // `a:X`, JassHelper's `X[a]`.
     Punct::Colon,
@@ -121,13 +160,19 @@ pub const VJASS_SPEC: LexSpec = LexSpec {
 /// Which JASS dialect to read; it picks the [`LexSpec`].
 ///
 /// Chosen **per file**, so one project can mix plain JASS, vJASS (with
-/// embedded Zinc), and later other dialects. A file is plain JASS unless
-/// its header says otherwise (see [`Dialect::detect`]).
+/// embedded Zinc), and later other dialects. A file is (extended) JASS
+/// unless its header says otherwise (see [`Dialect::detect`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Dialect {
-    /// Plain JASS: `//! zinc` is just a comment, `library` is a name.
+    /// Extended JASS, the default: plain JASS (`//! zinc` is just a
+    /// comment, `library` is a name) and what no program of the game's can
+    /// mean otherwise: `!` for `not`, `&&` for `and`, `||` for `or`,
+    /// `set x += e` and `set x -= e`. A build writes them as the game's.
     #[default]
     Jass,
+    /// Strict JASS: exactly what the game reads, for checking compiled
+    /// code (a built `war3map.j`, the game's own scripts).
+    Strict,
     /// vJASS (JassHelper), including embedded `//! zinc` blocks.
     VJass,
 }
@@ -152,10 +197,12 @@ impl Dialect {
             .and_then(Dialect::from_name)
     }
 
-    /// The dialect named `name` (case-insensitive): `jass` or `vjass`.
+    /// The dialect named `name` (case-insensitive): `jass`, `strict` or
+    /// `vjass`.
     pub fn from_name(name: &str) -> Option<Dialect> {
         match name.to_ascii_lowercase().as_str() {
             "jass" => Some(Dialect::Jass),
+            "strict" => Some(Dialect::Strict),
             "vjass" => Some(Dialect::VJass),
             _ => None,
         }
@@ -164,6 +211,7 @@ impl Dialect {
     pub fn name(self) -> &'static str {
         match self {
             Dialect::Jass => "jass",
+            Dialect::Strict => "strict",
             Dialect::VJass => "vjass",
         }
     }
@@ -171,6 +219,7 @@ impl Dialect {
     pub fn spec(self) -> &'static LexSpec {
         match self {
             Dialect::Jass => &SPEC,
+            Dialect::Strict => &STRICT_SPEC,
             Dialect::VJass => &VJASS_SPEC,
         }
     }

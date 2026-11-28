@@ -1,6 +1,15 @@
 use crate::ast::*;
 pub use parser_rs::Node;
 
+/// ` +=` or ` -=` after a set's label, nothing for `=`.
+fn op_label(op: Option<BinOp>) -> &'static str {
+    match op {
+        Some(BinOp::Add) => " +=",
+        Some(BinOp::Sub) => " -=",
+        _ => "",
+    }
+}
+
 /// Builds a visualizable tree out of a parsed program.
 pub fn build_tree(program: &Program) -> Node {
     Node::with_children(
@@ -197,6 +206,7 @@ fn stmt_node(s: &Stmt) -> Node {
         Stmt::Set {
             name,
             index,
+            op,
             value,
             line,
             ..
@@ -212,7 +222,7 @@ fn stmt_node(s: &Stmt) -> Node {
                 Node::with_children("Value", vec![expr_node(value)])
                     .tag("container", Some(Span::whole_line(*line))),
             );
-            Node::with_children(format!("Set {name} (line {line})"), children)
+            Node::with_children(format!("Set {name}{} (line {line})", op_label(*op)), children)
                 .tag("stmt", Some(Span::whole_line(*line)))
         }
         Stmt::Call { name, args, line, .. } => Node::with_children(
@@ -265,13 +275,13 @@ fn stmt_node(s: &Stmt) -> Node {
             Node::with_children(format!("Debug (line {line})"), vec![stmt_node(stmt)])
                 .tag("stmt", Some(Span::whole_line(*line)))
         }
-        Stmt::SetMember { target, index, value, line, .. } => {
+        Stmt::SetMember { target, index, op, value, line, .. } => {
             let mut children = vec![Node::with_children("Target", vec![expr_node(target)]).tag("container", Some(target.span))];
             if let Some(idx) = index {
                 children.push(Node::with_children("Index", vec![expr_node(idx)]).tag("container", Some(idx.span)));
             }
             children.push(Node::with_children("Value", vec![expr_node(value)]).tag("container", Some(value.span)));
-            Node::with_children(format!("SetMember (line {line})"), children).tag("stmt", Some(Span::whole_line(*line)))
+            Node::with_children(format!("SetMember{} (line {line})", op_label(*op)), children).tag("stmt", Some(Span::whole_line(*line)))
         }
         Stmt::CallMethod { call, line, .. } => {
             Node::with_children(format!("CallMethod (line {line})"), vec![expr_node(call)]).tag("stmt", Some(Span::whole_line(*line)))

@@ -137,11 +137,11 @@ endfunction
 
 #[test]
 fn top_level_globals_are_fine_and_checked_for_duplicates() {
-    let (diags, pure): (Vec<_>, Vec<_>) = lint_src("integer x = 1\nglobals\n    integer y\nendglobals\nreal x")
+    let (diags, strict): (Vec<_>, Vec<_>) = lint_src("integer x = 1\nglobals\n    integer y\nendglobals\nreal x")
         .into_iter()
         .partition(|d| d.rule != rule::GLOBAL_OUTSIDE_GLOBALS);
-    // Only pure JASS (off by default) objects to them.
-    assert_eq!(pure.iter().map(|d| d.line).collect::<Vec<_>>(), vec![1, 5]);
+    // Only strict JASS (off by default) objects to them.
+    assert_eq!(strict.iter().map(|d| d.line).collect::<Vec<_>>(), vec![1, 5]);
     assert_eq!(diags.len(), 1, "{diags:?}");
     assert_eq!(diags[0].line, 5);
     assert!(diags[0].message.contains("duplicate global variable 'x' (first declared at line 1)"));
@@ -243,7 +243,7 @@ endfunction
 }
 
 #[test]
-fn pure_jass_declaration_order() {
+fn strict_jass_declaration_order() {
     let src = "\
 type mytype extends handle
 integer early = 1

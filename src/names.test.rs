@@ -449,3 +449,11 @@ endfunction
     let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
     assert!(said.is_empty(), "{said:?}");
 }
+
+/// `+=`, `-=`: the target's sum with the value is what's set, checked so.
+#[test]
+fn compound_assignments_are_typed_as_their_sum() {
+    let src = "function F takes nothing returns nothing\n    local integer i = 0\n    local real r = 0\n    local string s = \"\"\n    local boolean b = false\n    set i += 1\n    set r -= i\n    set s += I2S(i)\n    set i += 1.5\n    set b += 1\n    set s -= \"a\"\nendfunction\n";
+    let lines: Vec<usize> = found(src, &[&env()]).into_iter().map(|(l, _, _)| l).collect();
+    assert_eq!(lines, [9, 10, 11], "{:?}", found(src, &[&env()]));
+}

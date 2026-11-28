@@ -6,6 +6,7 @@ built for WC3 modding tools. Language-agnostic pieces come from the shared
 the token stream, diagnostics, tree renderers and the HTML AST viewer.
 
 - [The JASS language](#the-jass-language) — a syntax reference to build on
+- [Strict and extended JASS](#strict-and-extended-jass) — the game's JASS and ours
 - [Parser status](#parser-status) — what `jass-rs` handles today
 - [CLI](#cli) · [Tests](#tests)
 
@@ -86,14 +87,16 @@ constant native GetTriggerUnit takes nothing returns unit
 
 The grammar above is what the game reads. Source files here are built
 into it, so the top level is more relaxed. Each relaxation that the game
-itself would reject is reported by a rule in the lint group `pure`, off
-by default: a project that must stay pure JASS turns it on with
-`pure=error` in `[lint]` of `wc3.bni`.
+itself would reject is reported by a rule in the lint group `strict`,
+off by default in extended JASS (a project that wants its sources as the
+game's turns it on with `strict=error` in `[lint]` of `wc3.bni`), and
+always errors in strict JASS (see
+[Strict and extended JASS](#strict-and-extended-jass)).
 
 - **`takes` and `returns` may be left out** of a `function` or `native`:
   left out, they mean `takes nothing` and `returns nothing`. Either one
   can be written alone. The game requires both (rule
-  `implicit-signature`, group `pure`).
+  `implicit-signature`, group `strict`).
 
   ```jass
   function Init                        // = takes nothing returns nothing
@@ -114,7 +117,7 @@ by default: a project that must stay pure JASS turns it on with
   its type), and a name alone is an error. So a value of `return` is on
   its line: `return` with a name on the next line returns nothing, and
   the name starts the next statement. The game requires the keyword
-  (rule `implicit-keyword`, group `pure`).
+  (rule `implicit-keyword`, group `strict`).
 
   ```jass
   function Tick
@@ -129,7 +132,7 @@ by default: a project that must stay pure JASS turns it on with
   merges them into one, each one's statements in their order. So a
   piece of code sets itself up where it is, without one `main` that
   calls everything. The game reads one of each (rule `merged-function`,
-  group `pure`); another of them that takes or returns something is a
+  group `strict`); another of them that takes or returns something is a
   duplicate, as any other function's.
 
   ```jass
@@ -144,11 +147,11 @@ by default: a project that must stay pure JASS turns it on with
   anywhere among the functions. When the map is built they go into the
   `globals` block, so they're ordinary globals: same syntax, same rules,
   and duplicates are checked across both forms. The game reads variables
-  only inside `globals` (rule `global-outside-globals`, group `pure`).
+  only inside `globals` (rule `global-outside-globals`, group `strict`).
 - **Declarations may come after functions.** A variable, a `globals`
   block, a `native` or a `type` may follow a function. The game reads
   them only before the first function (rule `declaration-after-function`,
-  group `pure`; an empty `globals` block declares nothing and isn't
+  group `strict`; an empty `globals` block declares nothing and isn't
   reported).
 
   ```jass
@@ -220,6 +223,11 @@ function: outside debug mode it isn't there, so an `exitwhen` or
 | 5                       | `+` `-` (binary; `+` also concatenates strings) |
 | 6                       | `*` `/` (integer `/` truncates)                 |
 | 7                       | unary `-`, `+`, `not`                           |
+
+Extended JASS (the default, see
+[Strict and extended JASS](#strict-and-extended-jass)) also has `!` for
+`not`, `&&` for `and` and `||` for `or`, at the same precedence, and
+`set x += v`, `set x -= v`.
 
 Operands are literals, variables, `arr[index]`, calls `Foo(args)`,
 parenthesized expressions and code references `function Foo`. A code
@@ -345,6 +353,66 @@ function or `S.m`): `TopLevel::Hook`.
 
 ---
 
+## Strict and extended JASS
+
+Two tasks need two readings. A map that's built must run, so what the
+game would reject has to be found in it; and the sources a map is built
+of are written as their authors prefer. Here **the build is the main
+tool**: sources are written in extended JASS (or vJASS, Zinc ...), the
+build makes the map's `war3map.j`, and that `war3map.j` goes through
+strict JASS, to catch **the build's own mistakes**.
+
+Every lint rule has its own name (`implicit-keyword`, ...; see the
+[`wc3-rs` README](../wc3-rs/README.md#lint)). The rules that make the
+reading the game's form the group **`strict`**: each finds what this
+toolchain reads and the game doesn't.
+
+- **Strict** (`Dialect::Strict`, `// @dialect strict`,
+  `[jass] dialect=strict`, `jass_rs::parse`): exactly what the game
+  reads, nothing more, for checking compiled code: the `war3map.j` a
+  build made (the build checks it so), a map's `war3map.j` and
+  `Scripts\war3map.j` (an earlier build's), its `.ai` and `.pld`, the
+  game's scripts. By its path, such a file is strict whatever its
+  header says: the game knows no `// @dialect`, a comment to it. What the game would reject is an error: the parser's,
+  or a rule's of the group `strict`, whatever the project's `[lint]`
+  says (`x = 1` without `set` parses, and is an error of
+  `implicit-keyword`).
+  **A strict file is one whole program.** The game has no imports: a
+  map's script is one file, run with the game's `common.j` and
+  `Blizzard.j` (`common.ai` for an AI script). So a strict file is read
+  with the game's files only: it doesn't see its neighbours (its
+  project's other files), and they don't see it.
+- **Extended** (`Dialect::Jass`, the default): strict JASS and what no
+  strict program can mean otherwise. The rule: **no strict JASS can be
+  written that extended JASS breaks or reads another way.** Each program
+  the game reads, extended JASS reads the same; an addition only gives
+  a meaning to what strict JASS rejects. A build writes the additions
+  as the game's JASS.
+
+So a new word can never be an addition: `integer scope = 1` is strict
+JASS, and a keyword `scope` would break it (it does break vJASS, which
+is why vJASS is a dialect a file opts into, not the default). A new
+operator can be: `boolean b = !a` is an error in strict JASS, so nothing
+the game reads changes when extended JASS reads it as `boolean b = not a`.
+
+Extended JASS's additions (vJASS has them too, being built on it):
+
+| extended          | strict                | notes                                             |
+|-------------------|-----------------------|---------------------------------------------------|
+| `!a`              | `not a`               | `!=` stays the comparison                         |
+| `a && b`          | `a and b`             | `and`'s precedence: looser than `or`              |
+| `a \|\| b`          | `a or b`              | so `a && b \|\| c` is `a and (b or c)`              |
+| `set x += v`      | `set x = x + (v)`     | arrays and vJASS members too; without `set`, as `x = v` is (`implicit-keyword`) |
+| `set x -= v`      | `set x = x - (v)`     | an index (`a[f()] -= 1`) is read twice, as Zinc's |
+
+`&&` and `||` keep JASS's precedence, not C's: they are only other
+spellings of `and` and `or`, so mixing spellings never changes a
+meaning. The AST doesn't tell the spellings apart (`UnaryOp::Not`,
+`BinOp::And`, `BinOp::Or`); a compound assignment is `Stmt::Set` (or
+`SetMember`) with `op: Some(BinOp::Add | BinOp::Sub)`. Names check its
+type as the sum's (`set s += "a"` for a string, not `set b += 1` for a
+boolean), and lint counts it as reading its target.
+
 ## Parser status
 
 Supported: everything in the reference above **except**:
@@ -461,7 +529,7 @@ Not built yet; the modules are shaped for them (see the
   names (the server's symbol index, the game's `common.j` and
   `Blizzard.j`), so the parser keeps every declaration and reference with
   its span and order.
-- **Order, as the game reads it** (group `pure`): a call to a function
+- **Order, as the game reads it** (group `strict`): a call to a function
   declared below it, and a `local` after a statement. Off for sources,
   where the build sorts functions and locals go anywhere; on for a map's
   `war3map.j`.
@@ -477,9 +545,10 @@ JASS, vJASS and (later) other dialects:
 
 | header                       | dialect                                                         |
 |------------------------------|-----------------------------------------------------------------|
-| *(none)*, or an unknown name | **plain JASS** (the default; `library` is a name, `//! zinc` a comment) |
-| `// @dialect vjass`          | **vJASS**: vJASS keywords, `/* */` comments, embedded Zinc      |
-| `// @dialect jass`           | plain JASS, stated explicitly                                   |
+| *(none)*, or an unknown name | **extended JASS** (the default; `library` is a name, `//! zinc` a comment) |
+| `// @dialect vjass`          | **vJASS**: extended JASS, vJASS keywords, `/* */` comments, embedded Zinc |
+| `// @dialect jass`           | extended JASS, stated explicitly                                |
+| `// @dialect strict`         | **strict JASS**: exactly the game's (compiled code)             |
 
 Only the header (leading blank and comment lines) is read. The name is
 case-insensitive. A Chinese JASS dialect is planned as another
@@ -492,7 +561,8 @@ case-insensitive. A Chinese JASS dialect is planned as another
 - **API.** `jass_rs::parse_file(src)` honours the header (`Dialect::detect`);
   `Dialect::declared(src)` is the header alone, `None` when it names no
   known dialect.
-  `jass_rs::parse(src)` is always plain JASS, and
+  `jass_rs::parse(src)` is always strict JASS (for the game's scripts
+  and a build's output), and
   `jass_rs::parse_with(src, dialect)` forces a dialect.
 - **vJASS** is the same parser with a bigger keyword set
   (`VJASS_KEYWORDS`), `/* */` comments, and **embedded Zinc**.

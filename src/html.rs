@@ -20,7 +20,7 @@ pub static VJASS_HTML: HtmlLang = HtmlLang {
 /// the viewer does; this only supplies the JASS-specific bits.
 pub fn render_html(program: &Program, source: &str, title: &str) -> String {
     let lang = match Dialect::detect(source) {
-        Dialect::Jass => &JASS_HTML,
+        Dialect::Jass | Dialect::Strict => &JASS_HTML,
         Dialect::VJass => &VJASS_HTML,
     };
     parser_rs::render_html(&build_tree(program), source, title, lang)

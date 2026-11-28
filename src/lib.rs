@@ -21,13 +21,14 @@ pub use semantic::{
     encoded_semantic_tokens, semantic_tokens, semantic_tokens_and_symbols, semantic_tokens_with, symbols,
 };
 
-/// Parses plain JASS source into an AST.
+/// Parses strict JASS, exactly what the game reads (a built `war3map.j`,
+/// `common.j`, `Blizzard.j`), into an AST: [`Dialect::Strict`].
 pub fn parse(src: &str) -> Result<Program, ParseError> {
-    Parser::parse_str(src)
+    Parser::parse_str_with(src, Dialect::Strict)
 }
 
 /// Parses source in the dialect its header declares (`// @dialect vjass`),
-/// plain JASS by default. This is what tools should use for real files.
+/// extended JASS by default. This is what tools should use for real files.
 pub fn parse_file(src: &str) -> Result<Program, ParseError> {
     Parser::parse_str_with(src, Dialect::detect(src))
 }

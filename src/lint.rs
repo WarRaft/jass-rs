@@ -505,7 +505,11 @@ fn collect_used_vars_stmt(s: &Stmt, used: &mut HashSet<String>) {
                 collect_used_vars(e, used);
             }
         }
-        Stmt::Set { index, value, .. } => {
+        Stmt::Set { name, index, op, value, .. } => {
+            // `+=`, `-=` read what they set.
+            if op.is_some() {
+                used.insert(name.clone());
+            }
             if let Some(i) = index {
                 collect_used_vars(i, used);
             }

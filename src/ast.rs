@@ -299,6 +299,9 @@ pub enum Stmt {
     Set {
         name: String,
         index: Option<Expr>,
+        /// Extended JASS: `Some(Add)` for `+=`, `Some(Sub)` for `-=`; the
+        /// value is then what's added to (taken from) the target.
+        op: Option<BinOp>,
         value: Expr,
         line: usize,
         /// Whether `set` is written. Left out (`x = 1`), this toolchain
@@ -345,6 +348,8 @@ pub enum Stmt {
     SetMember {
         target: Expr,
         index: Option<Expr>,
+        /// `+=` / `-=`, as [`Stmt::Set`]'s.
+        op: Option<BinOp>,
         value: Expr,
         line: usize,
         keyword: bool,

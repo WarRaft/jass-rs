@@ -631,13 +631,19 @@ impl Checker<'_> {
                     self.expect(ty, type_name, || format!("the value of '{name}'"), *line, Some(e.span));
                 }
             }
-            Stmt::Set { name, index, value, line, .. } => {
+            Stmt::Set { name, index, op, value, line, .. } => {
                 let var = self.var(name, *line, None);
                 if let Some(i) = index {
                     self.index(i);
                 }
                 let ty = self.expr(value);
                 let Some(var) = var else { return };
+                // `+=`, `-=`: what's set is the target's sum with the value
+                // (difference), its element's for an array.
+                let ty = match op {
+                    Some(op) if var.array == index.is_some() => self.binary(*op, Some(Ty::of(&var.ty)), ty, value),
+                    _ => ty,
+                };
                 if var.constant {
                     let d = Diagnostic::error(rule::CONSTANT_ASSIGNMENT, format!("'{name}' is a constant: it can't be set"), *line);
                     self.push(d, None);

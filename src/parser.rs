@@ -680,7 +680,7 @@ impl Parser {
                 self.expect(TokenKind::Punct(Punct::RParen))?;
                 Ok(Stmt::Call { name, args, line, keyword: false })
             }
-            TokenKind::Punct(Punct::Assign | Punct::LBracket) => self.assignment(line, false),
+            TokenKind::Punct(Punct::Assign | Punct::PlusAssign | Punct::MinusAssign | Punct::LBracket) => self.assignment(line, false),
             // `integer i = 0`, `unit array u`: in a function, a local.
             TokenKind::Ident(_) | TokenKind::Keyword(Kw::Array) => self.local_decl(line, false),
             _ => {
@@ -706,7 +706,7 @@ impl Parser {
         match self.peek_kind() {
             // A name: an assignment or a call, `set` or `call` left out.
             TokenKind::Ident(_)
-                if !matches!(self.ts.nth_kind(1), TokenKind::Punct(Punct::Assign | Punct::LBracket | Punct::LParen)) =>
+                if !matches!(self.ts.nth_kind(1), TokenKind::Punct(Punct::Assign | Punct::PlusAssign | Punct::MinusAssign | Punct::LBracket | Punct::LParen)) =>
             {
                 Err(self.error("'debug' can only precede 'set', 'call', 'if' or 'loop'"))
             }
@@ -765,7 +765,7 @@ impl Parser {
             self.advance();
             self.advance();
             let value = self.expr()?;
-            return Ok(Stmt::Set { name: "this".into(), index: None, value, line, keyword: true });
+            return Ok(Stmt::Set { name: "this".into(), index: None, op: None, value, line, keyword: true });
         }
         if self.starts_member() {
             return self.member_stmt(line, true);
@@ -815,18 +815,18 @@ impl Parser {
     /// (`a.b()`), after `set` or `call` if `keyword`.
     fn member_stmt(&mut self, line: usize, keyword: bool) -> Result<Stmt, ParseError> {
         let target = self.unary_expr()?;
-        if self.ts.eat(&TokenKind::Punct(Punct::Assign)) {
+        if let Some(op) = self.assign_op() {
             let value = self.expr()?;
             return match target.kind {
-                ExprKind::Member(..) => Ok(Stmt::SetMember { target, index: None, value, line, keyword }),
+                ExprKind::Member(..) => Ok(Stmt::SetMember { target, index: None, op, value, line, keyword }),
                 ExprKind::Index(member, index) if matches!(member.kind, ExprKind::Member(..)) => {
-                    Ok(Stmt::SetMember { target: *member, index: Some(*index), value, line, keyword })
+                    Ok(Stmt::SetMember { target: *member, index: Some(*index), op, value, line, keyword })
                 }
-                ExprKind::Var(name) => Ok(Stmt::Set { name, index: None, value, line, keyword }),
-                ExprKind::ArrayAccess(name, index) => Ok(Stmt::Set { name, index: Some(*index), value, line, keyword }),
+                ExprKind::Var(name) => Ok(Stmt::Set { name, index: None, op, value, line, keyword }),
+                ExprKind::ArrayAccess(name, index) => Ok(Stmt::Set { name, index: Some(*index), op, value, line, keyword }),
                 // An element of what isn't a name: a cast's (`Table(this)[i]`).
                 ExprKind::Index(of, index) if matches!(of.kind, ExprKind::Call(..) | ExprKind::MethodCall(..) | ExprKind::Index(..)) => {
-                    Ok(Stmt::SetMember { target: *of, index: Some(*index), value, line, keyword })
+                    Ok(Stmt::SetMember { target: *of, index: Some(*index), op, value, line, keyword })
                 }
                 _ => Err(self.error("only a name, a member or an element of one can be set")),
             };
@@ -889,6 +889,27 @@ impl Parser {
         }
     }
 
+    /// An assignment's operator: `=` (`Some(None)`), and in extended JASS
+    /// `+=` and `-=` (`Some(Some(op))`); `None`, eating nothing, if none.
+    fn assign_op(&mut self) -> Option<Option<BinOp>> {
+        let op = match self.peek_kind() {
+            TokenKind::Punct(Punct::Assign) => None,
+            TokenKind::Punct(Punct::PlusAssign) => Some(BinOp::Add),
+            TokenKind::Punct(Punct::MinusAssign) => Some(BinOp::Sub),
+            _ => return None,
+        };
+        self.advance();
+        Some(op)
+    }
+
+    /// [`Self::assign_op`], or an error if there's none.
+    fn expect_assign_op(&mut self) -> Result<Option<BinOp>, ParseError> {
+        match self.assign_op() {
+            Some(op) => Ok(op),
+            None => self.expect(TokenKind::Punct(Punct::Assign)).map(|_| None),
+        }
+    }
+
     /// `name = value` or `name[index] = value`, after `set` if `keyword`.
     fn assignment(&mut self, line: usize, keyword: bool) -> Result<Stmt, ParseError> {
         let name = self.expect_identifier()?;
@@ -897,10 +918,10 @@ impl Parser {
             let at = self.peek().clone();
             self.advance();
             let array = self.expect_identifier()?;
-            self.expect(TokenKind::Punct(Punct::Assign))?;
+            let op = self.expect_assign_op()?;
             let value = self.expr()?;
             let index = Expr::new(ExprKind::Var(name), Span::new(at.line, at.col, at.line, at.col));
-            return Ok(Stmt::Set { name: array, index: Some(index), value, line, keyword });
+            return Ok(Stmt::Set { name: array, index: Some(index), op, value, line, keyword });
         }
         let index = if self.check(&TokenKind::Punct(Punct::LBracket)) {
             self.advance();
@@ -919,17 +940,18 @@ impl Parser {
             self.advance();
             let j = self.expr()?;
             let close = self.expect(TokenKind::Punct(Punct::RBracket))?;
-            self.expect(TokenKind::Punct(Punct::Assign))?;
+            let op = self.expect_assign_op()?;
             let value = self.expr()?;
             let span = Span::new(line, 0, close.line, close.end_col);
             let target = Expr::new(ExprKind::ArrayAccess(name, Box::new(i.clone())), span);
-            return Ok(Stmt::SetMember { target, index: Some(j), value, line, keyword });
+            return Ok(Stmt::SetMember { target, index: Some(j), op, value, line, keyword });
         }
-        self.expect(TokenKind::Punct(Punct::Assign))?;
+        let op = self.expect_assign_op()?;
         let value = self.expr()?;
         Ok(Stmt::Set {
             name,
             index,
+            op,
             value,
             line,
             keyword,
@@ -1033,6 +1055,7 @@ impl Parser {
                 | TokenKind::Punct(Punct::Minus)
                 | TokenKind::Punct(Punct::Plus)
                 | TokenKind::Keyword(Kw::Not)
+                | TokenKind::Punct(Punct::Bang)
                 | TokenKind::Keyword(Kw::Function)
                 | TokenKind::Keyword(Kw::This)
                 | TokenKind::Keyword(Kw::ThisType)
@@ -1060,11 +1083,11 @@ impl Parser {
 
     /// Unlike C-family languages, JASS gives `and` *lower* precedence than
     /// `or`: `false and true or true` is `false and (true or true)`, i.e.
-    /// `false`.
+    /// `false`. Extended JASS's `&&` is `and`, `||` is `or`, precedence too.
     fn and_expr(&mut self) -> Result<Expr, ParseError> {
         self.left_assoc(
             Self::or_expr,
-            |k| matches!(k, TokenKind::Keyword(Kw::And)).then_some(BinOp::And),
+            |k| matches!(k, TokenKind::Keyword(Kw::And) | TokenKind::Punct(Punct::AndAnd)).then_some(BinOp::And),
             binary,
         )
     }
@@ -1072,7 +1095,7 @@ impl Parser {
     fn or_expr(&mut self) -> Result<Expr, ParseError> {
         self.left_assoc(
             Self::equality_expr,
-            |k| matches!(k, TokenKind::Keyword(Kw::Or)).then_some(BinOp::Or),
+            |k| matches!(k, TokenKind::Keyword(Kw::Or) | TokenKind::Punct(Punct::OrOr)).then_some(BinOp::Or),
             binary,
         )
     }
@@ -1141,7 +1164,8 @@ impl Parser {
                 let span = Span::new(op_tok.line, op_tok.col, e.span.end_line, e.span.end_col);
                 Ok(Expr::new(ExprKind::Unary(UnaryOp::Plus, Box::new(e)), span))
             }
-            TokenKind::Keyword(Kw::Not) => {
+            // Extended JASS's `!` is `not`.
+            TokenKind::Keyword(Kw::Not) | TokenKind::Punct(Punct::Bang) => {
                 let op_tok = self.advance();
                 let e = self.unary_expr()?;
                 let span = Span::new(op_tok.line, op_tok.col, e.span.end_line, e.span.end_col);

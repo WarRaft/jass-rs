@@ -464,13 +464,14 @@ fn vjass_libraries_structs_and_members() {
             keyword: true
         }
     );
-    assert_eq!(create[1], Stmt::SetMember { target: member(v("c"), "value"), index: None, value: v("v"), line: 35, keyword: true });
+    assert_eq!(create[1], Stmt::SetMember { target: member(v("c"), "value"), index: None, op: None, value: v("v"), line: 35, keyword: true });
     let list_0 = Expr::dummy(ExprKind::Index(Box::new(member(v("c"), "list")), Box::new(int(0))));
     assert_eq!(
         create[2],
         Stmt::SetMember {
             target: member(v("c"), "list"),
             index: Some(int(1)),
+            op: None,
             value: Expr::dummy(ExprKind::Binary(Box::new(list_0), BinOp::Add, Box::new(int(2)))),
             line: 36,
             keyword: true
@@ -478,7 +479,7 @@ fn vjass_libraries_structs_and_members() {
     );
     // `.id`: `this` written nowhere.
     let this = || Expr::dummy(ExprKind::This);
-    assert_eq!(create[4], Stmt::SetMember { target: member(this(), "id"), index: None, value: member(this_type(), "made"), line: 38, keyword: true });
+    assert_eq!(create[4], Stmt::SetMember { target: member(this(), "id"), index: None, op: None, value: member(this_type(), "made"), line: 38, keyword: true });
     let destroy = methods[4].body.as_ref().unwrap();
     assert!(matches!(&destroy[0], Stmt::CallMethod { call, .. } if matches!(&call.kind, ExprKind::MethodCall(o, n, _) if o.kind == ExprKind::Super && n == "onDestroy")));
 
@@ -614,4 +615,43 @@ fn vjass_as_real_libraries_write_it() {
     let p = v("function F takes integer i returns nothing\n    debug if i < 0 then\n        debug call BJDebugMsg(\"low\")\n    debug else\n        debug call BJDebugMsg(\"ok\")\n    debug endif\nendfunction\n");
     let TopLevel::Function(f) = &p.items[0] else { panic!() };
     assert!(matches!(&f.body[0], Stmt::Debug { stmt, .. } if matches!(&**stmt, Stmt::If { else_branch: Some(_), .. })), "{:?}", f.body);
+}
+
+/// Extended JASS (the default) reads `!`, `&&`, `||` as `not`, `and`,
+/// `or`, precedence included; vJASS is built on it; strict JASS, the
+/// game's, doesn't read them.
+#[test]
+fn extended_jass_operators_are_the_games() {
+    let body = |e: &str| format!("function F takes boolean a, boolean b returns boolean\n    return {e}\nendfunction\n");
+    let ret = |src: &str, d: Dialect| match &Parser::parse_str_with(src, d).unwrap().items[0] {
+        TopLevel::Function(f) => f.body[0].clone(),
+        other => panic!("{other:?}"),
+    };
+    for d in [Dialect::Jass, Dialect::VJass] {
+        assert_eq!(ret(&body("!a && b || !!a"), d), ret(&body("not a and b or not not a"), Dialect::Strict));
+        assert_eq!(ret(&body("!(a == b) != b"), d), ret(&body("not (a == b) != b"), Dialect::Strict));
+    }
+    for e in ["!a", "a && b", "a || b"] {
+        assert!(Parser::parse_str_with(&body(e), Dialect::Strict).is_err(), "{e}");
+    }
+    assert!(crate::parse(&body("!a")).is_err(), "jass_rs::parse is strict");
+}
+
+/// `set x += v`, `set x -= v`: in extended JASS and vJASS (members too),
+/// not in strict.
+#[test]
+fn extended_jass_compound_assignments() {
+    let src = "function F takes nothing returns nothing\n    local integer array xs\n    set xs[1] += 2\n    set xs[1] -= 3\n    xs[1] += 4\nendfunction\n";
+    let TopLevel::Function(f) = &Parser::parse_str_with(src, Dialect::Jass).unwrap().items[0] else { panic!() };
+    let ops: Vec<_> = f.body.iter().filter_map(|s| match s {
+        Stmt::Set { name, op, keyword, .. } => Some((name.as_str(), *op, *keyword)),
+        _ => None,
+    }).collect();
+    assert_eq!(ops, [("xs", Some(BinOp::Add), true), ("xs", Some(BinOp::Sub), true), ("xs", Some(BinOp::Add), false)]);
+    assert!(Parser::parse_str_with(src, Dialect::Strict).is_err());
+    let vjass = "struct S\n    integer n\n    method m takes nothing returns nothing\n        set .n += 1\n        set this.n -= 2\n    endmethod\nendstruct\n";
+    let p = Parser::parse_str_with(vjass, Dialect::VJass).unwrap();
+    let TopLevel::Struct(s) = &p.items[0] else { panic!("{:?}", p.items[0]) };
+    let rendered = format!("{s:?}");
+    assert!(rendered.contains("op: Some(Add)") && rendered.contains("op: Some(Sub)"), "{rendered}");
 }
