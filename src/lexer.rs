@@ -131,11 +131,14 @@ pub const TEXTMACRO_EMBED: EmbedSpec = EmbedSpec {
 
 /// A `//! novjass` ... `//! endnovjass` block: what JassHelper leaves out
 /// (often a library's documentation). One token, skipped by the parser.
+/// Text after the opening word is taken as JassHelper (and the build's
+/// preprocessor) takes it, a remark: `//! novjass ( Disables the compiler
+/// until the next endnovjass )`, as BPower's TextSplat2 writes it.
 pub const NOVJASS_EMBED: EmbedSpec = EmbedSpec {
     lang: "novjass",
     open: "//! novjass",
     close: "//! endnovjass",
-    prefix: false,
+    prefix: true,
 };
 
 /// An `//! inject main` (`config`) ... `//! endinject` block: the lines

@@ -510,7 +510,7 @@ Supported: everything in the reference above **except**:
 | locals-first rule                         | `local` is accepted anywhere in a body                  |
 | type checking / declare-before-use        | no symbol or type resolution yet                        |
 | vJASS member statement after `debug` without `set`/`call` | `debug set .x = 1` reads, `debug .x = 1` doesn't |
-| JassHelper's preprocessor                 | run by a build (`wc3-build`'s `preprocess`); here a `//! textmacro` ... `//! endtextmacro` and a `//! novjass` ... `//! endnovjass` are one token each (an embedded block, as `//! zinc`), skipped by the parser and shown as a comment; a `//! runtextmacro` is a comment |
+| JassHelper's preprocessor                 | run by a build (`wc3-build`'s `preprocess`); here a `//! textmacro` ... `//! endtextmacro` and a `//! novjass` (text after it a remark, as JassHelper takes it) ... `//! endnovjass` are one token each (an embedded block, as `//! zinc`), skipped by the parser and shown as a comment; a `//! runtextmacro` is a comment |
 
 vJASS: everything in its reference above, in `Dialect::VJass` only (the
 lexer turns its words and `.` on; in plain JASS `library` is a name). The

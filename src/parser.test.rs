@@ -513,6 +513,12 @@ fn jasshelpers_preprocessor_blocks_arent_code_of_their_place() {
     // Highlighted as comments, the directives as macros.
     let tokens = crate::semantic::semantic_tokens_with(src, Dialect::VJass);
     assert!(tokens.iter().any(|t| t.line == 2 && t.ty == parser_rs::SemanticType::Comment), "{tokens:?}");
+
+    // Text after `//! novjass`, a remark (BPower's TextSplat2): the block
+    // all the same, as JassHelper and the build read it.
+    let src = "//! novjass ( Disables the compiler until the next endnovjass )\n    method setPosition takes real x return nothing\n//! endnovjass\nfunction F takes nothing returns nothing\nendfunction\n";
+    let p = Parser::parse_str_with(src, Dialect::VJass).unwrap_or_else(|e| panic!("line {}: {}", e.line, e.message));
+    assert_eq!(p.items.len(), 1, "{:?}", p.items);
 }
 
 #[test]
