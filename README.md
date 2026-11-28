@@ -382,6 +382,14 @@ toolchain reads and the game doesn't.
   `Blizzard.j` (`common.ai` for an AI script). So a strict file is read
   with the game's files only: it doesn't see its neighbours (its
   project's other files), and they don't see it.
+  **A builder of one's own** makes a map's script of several files put
+  together in an order: `jass_rs::strict::check(files, env)` reads them
+  as that one file, glued in the order given, and says each problem at
+  its own file and line (a "line N" in a message too, as `b.j:3`); `env`
+  the game's declarations (`common.j`, `Blizzard.j`), before the script
+  and not part of it. The CLI's `--strict` and `wc3-mcp`'s `code_check`
+  (`strict`) are it. Order matters: the game knows a function only from
+  its declaration down (`call-before-declaration`).
 - **Extended** (`Dialect::Jass`, the default): strict JASS and what no
   strict program can mean otherwise. The rule: **no strict JASS can be
   written that extended JASS breaks or reads another way.** Each program
@@ -609,6 +617,8 @@ cargo run -- --dot file.j      # Graphviz DOT
 cargo run -- --html file.j > file.ast.html && open file.ast.html
 cargo run -- --vjass file.j    # force vJASS (default: the file's `// @dialect` header)
 cargo run -- --jass file.j     # force plain JASS
+# strict JASS: the files as one script, glued in this order; names over --with's
+cargo run -- --strict --with common.j --with Blizzard.j head.j lib.j main.j
 ```
 
 ## Tests

@@ -368,3 +368,31 @@ fn implicit_keyword_names_a_local_too() {
     let diags = lint_src("function F\n    integer k = 0\nendfunction\n");
     assert!(diags.iter().any(|d| d.rule == rule::UNUSED_LOCAL), "{diags:?}");
 }
+
+/// `call-before-declaration` (group `strict`): the game knows a function
+/// only from its declaration down; calling itself is fine; a name declared
+/// nowhere here (a native of common.j) isn't this rule's.
+#[test]
+fn strict_jass_calls_only_up() {
+    let src = "\
+globals
+    integer g = Later()
+endglobals
+function Early takes nothing returns nothing
+    local code c = function Later
+    call Early()
+    call Later()
+    if Later() > 0 then
+        call KillUnit(null)
+    endif
+endfunction
+function Later takes nothing returns integer
+    call Early()
+    return Later()
+endfunction
+";
+    let found: Vec<(usize, String)> = lint_src(src).into_iter().filter(|d| d.rule == rule::CALL_BEFORE_DECLARATION).map(|d| (d.line, d.message)).collect();
+    assert_eq!(found.iter().map(|f| f.0).collect::<Vec<_>>(), [2, 5, 7, 8], "{found:?}");
+    assert!(found[1].1.contains("named by 'function'") && found[2].1.contains("'Later' is called above its declaration (line 12)"), "{found:?}");
+    assert!(!parser_rs::find_rule(rule::CALL_BEFORE_DECLARATION).unwrap().enabled);
+}

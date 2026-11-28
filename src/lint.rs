@@ -10,6 +10,7 @@ pub fn lint(program: &Program) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     check_duplicate_top_level_names(program, &mut diags);
     check_declaration_order(program, &mut diags);
+    check_calls_before_declarations(program, &mut diags);
     check_duplicate_global_names(program, &mut diags);
     lint_items(&program.items, &mut diags);
     diags.sort_by_key(|d| d.line);
@@ -173,6 +174,96 @@ fn check_duplicate_top_level_names(program: &Program, diags: &mut Vec<Diagnostic
 /// function, and variables only inside `globals`. This toolchain accepts
 /// both anywhere at the top level. An empty `globals` block has no line to
 /// report and declares nothing, so it isn't reported.
+/// `call-before-declaration`: the game knows a function (or a native) only
+/// from its declaration down, so a call of one, or `function X`, above it
+/// doesn't read; a function calling itself does. The top level only:
+/// vJASS's libraries and structs are ordered by JassHelper, and a build
+/// orders the functions of extended JASS.
+fn check_calls_before_declarations(program: &Program, diags: &mut Vec<Diagnostic>) {
+    let mut declared: HashMap<&str, (usize, usize)> = HashMap::new();
+    for (i, item) in program.items.iter().enumerate() {
+        let sig = match item {
+            TopLevel::Function(f) => &f.sig,
+            TopLevel::Native(sig) => sig,
+            _ => continue,
+        };
+        declared.entry(sig.name.as_str()).or_insert((i, sig.line));
+    }
+    let mut check = |i: usize, name: &str, line: usize, span: Option<parser_rs::Span>, what: &str| {
+        if let Some(&(at, decl_line)) = declared.get(name)
+            && at > i
+        {
+            let d = Diagnostic::error(
+                rule::CALL_BEFORE_DECLARATION,
+                format!("'{name}' is {what} above its declaration (line {decl_line}): the game knows a function only from there down"),
+                line,
+            );
+            diags.push(match span {
+                Some(s) => d.at(s),
+                None => d,
+            });
+        }
+    };
+    for (i, item) in program.items.iter().enumerate() {
+        let mut exprs: Vec<&Expr> = Vec::new();
+        let mut calls: Vec<(&str, usize)> = Vec::new();
+        match item {
+            TopLevel::Function(f) => stmts_exprs(&f.body, &mut exprs, &mut calls),
+            TopLevel::Globals(decls) => exprs.extend(decls.iter().filter_map(|d| d.initializer.as_ref())),
+            TopLevel::Global(d) => exprs.extend(d.initializer.as_ref()),
+            _ => continue,
+        }
+        for (name, line) in calls {
+            check(i, name, line, None, "called");
+        }
+        while let Some(e) = exprs.pop() {
+            match &e.kind {
+                ExprKind::Call(name, _) => check(i, name, e.span.start_line, Some(e.span), "called"),
+                ExprKind::FuncRef(name) => check(i, name, e.span.start_line, Some(e.span), "named by 'function'"),
+                _ => {}
+            }
+            exprs.extend(e.children());
+        }
+    }
+}
+
+/// Every expression of `body`'s statements (nested ones too), and the
+/// calls written as statements (`call F()`: a name and a line).
+fn stmts_exprs<'a>(body: &'a [Stmt], exprs: &mut Vec<&'a Expr>, calls: &mut Vec<(&'a str, usize)>) {
+    for s in body {
+        match s {
+            Stmt::Local { initializer, .. } => exprs.extend(initializer.as_ref()),
+            Stmt::Set { index, value, .. } => {
+                exprs.extend(index.as_ref());
+                exprs.push(value);
+            }
+            Stmt::SetMember { target, index, value, .. } => {
+                exprs.push(target);
+                exprs.extend(index.as_ref());
+                exprs.push(value);
+            }
+            Stmt::Call { name, args, line, .. } => {
+                calls.push((name, *line));
+                exprs.extend(args);
+            }
+            Stmt::CallMethod { call, .. } => exprs.push(call),
+            Stmt::If { branches, else_branch, .. } | Stmt::StaticIf { branches, else_branch, .. } => {
+                for (cond, b) in branches {
+                    exprs.push(cond);
+                    stmts_exprs(b, exprs, calls);
+                }
+                if let Some(b) = else_branch {
+                    stmts_exprs(b, exprs, calls);
+                }
+            }
+            Stmt::Loop { body, .. } => stmts_exprs(body, exprs, calls),
+            Stmt::ExitWhen { cond, .. } => exprs.push(cond),
+            Stmt::Return { value, .. } => exprs.extend(value.as_ref()),
+            Stmt::Debug { stmt, .. } => stmts_exprs(std::slice::from_ref(stmt), exprs, calls),
+        }
+    }
+}
+
 fn check_declaration_order(program: &Program, diags: &mut Vec<Diagnostic>) {
     let mut first_function: Option<usize> = None;
     for item in &program.items {

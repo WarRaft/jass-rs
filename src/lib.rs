@@ -8,6 +8,7 @@ pub mod parser;
 pub mod printer;
 pub mod query;
 pub mod semantic;
+pub mod strict;
 pub mod token;
 
 pub use ast::{ColumnEncoding, Program, Span};
