@@ -87,7 +87,9 @@ fn includes_lexical_tokens_and_comments() {
 
 #[test]
 fn still_highlights_unparsable_code() {
-    let src = "function F takes nothing returns nothing\n    set x = \"unterminated\n    call G(\nendfunction";
+    // (A string left open runs to the end of the file in JASS, a line
+    // break being part of it: an operator without its right side here.)
+    let src = "function F takes nothing returns nothing\n    set x = 1 *\n    call G(\nendfunction";
     assert!(crate::parse(src).is_err());
     let toks = semantic_tokens(src);
     assert!(toks.iter().any(|t| t.line == 3 && t.ty == T::Function)); // G(

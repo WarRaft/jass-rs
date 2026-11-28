@@ -27,14 +27,14 @@ delimited by keyword pairs, not braces.
 
 | element      | syntax                                                                                        |
 |--------------|-----------------------------------------------------------------------------------------------|
-| line breaks  | **significant**: every declaration/statement ends at end of line; no `;`                      |
+| line breaks  | **significant** (strict JASS): a declaration or statement is one line and ends at its end; no `;`; a line break stands nowhere else but in a string or a rawcode. Extended JASS: anywhere it reads one way only (see below) |
 | comments     | `// to end of line` only (no block comments in plain JASS; vJASS adds `/* */`)                |
 | identifiers  | a letter, then letters/digits/`_`, not ending in `_`: `[A-Za-z]([A-Za-z0-9_]*[A-Za-z0-9])?`   |
 | case         | everything is case-sensitive, keywords included                                               |
 | integers     | decimal `42`, octal `017` (leading `0`), hex `0x1F` / `0X1F` / `$1F`                          |
-| rawcodes     | `'hfoo'`: 4 chars packed big-endian into an integer (also a 1-char form `'a'`)                |
+| rawcodes     | `'hfoo'`: its bytes, 4 (or 1, `'a'`), up to the closing quote, packed big-endian into an integer; no escapes; any byte, a line break or an emoji's four too |
 | reals        | `1.5`, `1.`, `.5`                                                                             |
-| strings      | `"..."` with escapes `\n \t \r \b \f \" \\`; single-line                                      |
+| strings      | `"..."`: the quote takes everything up to the one closing it, line breaks included; escapes `\b \t \r \n \f \" \\`, any other an error. The game's text has its own codes: `\|cAARRGGBB` a color, `\|r` its end, `\|n` a line break, `TRIGSTR_n` a string of `war3map.wts` |
 | constants    | `true`, `false`, `null`                                                                       |
 
 **Keywords:** `function endfunction takes returns nothing native constant
@@ -221,7 +221,7 @@ function: outside debug mode it isn't there, so an `exitwhen` or
 | 3                       | `==` `!=`                                       |
 | 4                       | `<` `>` `<=` `>=`                               |
 | 5                       | `+` `-` (binary; `+` also concatenates strings) |
-| 6                       | `*` `/` (integer `/` truncates)                 |
+| 6                       | `*` `/` `%` (integer `/` truncates; `%` integers only) |
 | 7                       | unary `-`, `+`, `not`                           |
 
 Extended JASS (the default, see
@@ -413,6 +413,35 @@ Extended JASS's additions (vJASS has them too, being built on it):
 | `set x += v`      | `set x = x + (v)`     | arrays and vJASS members too; without `set`, as `x = v` is (`implicit-keyword`) |
 | `set x -= v`      | `set x = x - (v)`     | an index (`a[f()] -= 1`) is read twice, as Zinc's |
 
+**Line breaks.** In strict JASS a line break ends a declaration or a
+statement: each is one line (`if cond then`, `else`, `endif` too), and
+two never share one. A line break stands nowhere else but in a string or
+a rawcode, whose quote takes everything up to the closing one. The
+parser records where a line may start (a declaration, a statement, a
+block's end) and, in strict JASS, checks every token against that once
+the program is read: one starting a line elsewhere is "a line break
+inside a statement", one at such a place not starting its line "a second
+statement on the line". Extended JASS reads a line break anywhere it
+can only mean one thing, inside what can't have ended yet:
+
+```jass
+if
+    a
+    and
+    b
+then
+    call F(
+        a,
+        b)
+endif
+```
+
+Two places can be read two ways, and a line break ends the statement
+there: `return`'s value starts on its line (the next line's `G()` is a
+statement of its own), and in vJASS a `.` starting a line starts a
+statement (`.x = 1`, a member of `this`), not a member of the line above.
+Statements may share a line in extended JASS (`if a then call F() endif`).
+
 `&&` and `||` keep JASS's precedence, not C's: they are only other
 spellings of `and` and `or`, so mixing spellings never changes a
 meaning. The AST doesn't tell the spellings apart (`UnaryOp::Not`,
@@ -421,13 +450,63 @@ meaning. The AST doesn't tell the spellings apart (`UnaryOp::Not`,
 type as the sum's (`set s += "a"` for a string, not `set b += 1` for a
 boolean), and lint counts it as reading its target.
 
+### The game's rules (pjass's)
+
+The community checks scripts with pjass (`../pjass-master`); its checks
+are lint rules here, each with its name (the [`wc3-rs`
+README](../wc3-rs/README.md#lint) has them all). What breaks the game's
+compiling or running the script is the group `strict`'s; what's likely a
+mistake or a patch's limit, pjass's flags, the group `warnings`', each
+set on its own and never forced. `tests/pjass.rs` reads pjass's own
+tests (`should-check`, `should-fail`, a flag's by its rule) and checks
+strict JASS reads them as pjass does, but for these, decided otherwise:
+
+- **A name hidden.** A parameter or a local hiding a global variable is
+  legal (`shadowed-global`, a warning, off). Named as a primitive
+  (`local integer integer`) it's an error, as pjass has it
+  (`hidden-type`); as a declared type or a function (`local effect
+  effect`, which pjass lets be) the context tells them apart, but a
+  beginner should see it: `shadowed-name`, a warning. A type named after
+  a parameter or a local of its name hid it, or a global named as a
+  type, the game can't read: `hidden-type` too. A build renames every parameter and local named as a global, a
+  function, a type or `alias` (`x__l`), as extended JASS lets any name be
+  hidden and inlining mustn't have a local take a global's place.
+- **Parameters and locals of one name** are legal (`takes real B,
+  integer B, integer B` and `local integer B` ... `local string B`; pjass
+  says "already defined"). A local is, to the game, a parameter: declared
+  by name, put on the function's stack as it's read. Reading a name, the
+  game runs down the stack for the first that has it, from the top (from
+  the right, as C++ pushes arguments): the last declared is found, an
+  earlier one never. It doesn't stop the compiling, so it can't be an
+  error: a slip or a typo, `duplicate-declaration`, a warning.
+- **Strings and rawcodes.** A string's escapes are pjass's: `\b \t \r
+  \n \f \" \\`, any other an error (a backslash before a line break too). A
+  rawcode has none: the quote takes every byte up to the closing one (an
+  emoji's four, a line break), one or four bytes. One an editor can't
+  keep (a control character, a byte that isn't UTF-8, which reading the
+  file as UTF-8 loses) is `unsafe-rawcode`'s, whose fix writes it as
+  `0x...`, the same number (the editor's server takes lost bytes from the
+  file).
+- **The return bug** (pjass's `+rb`) was closed in 1.24: not read.
+- `%` is an operator (integers only; `modulo-operator`, off, for patches
+  before 1.29). A lone carriage return breaks a line in strict JASS, but
+  in a comment; a byte-order mark anywhere is whitespace; a NUL ends what
+  the game reads: an error.
+
+`lint::Options` gives the rules what's beyond the program: its source
+(`number-overflow` reads how a number is written, World Editor's
+`4294967296.0` aside: `war3map.w3s`'s "default" of a sound's real, 2^32,
+as it writes `SetSoundPitch`; `unsafe-rawcode` a
+rawcode's characters) and the string limits (`long-string`: 1023 bytes a
+literal, 4092 a concatenation of literals; `[jass] string_limit` and
+`concat_limit` in a project, 0 for none).
+
 ## Parser status
 
 Supported: everything in the reference above **except**:
 
 | not yet                                   | notes                                                   |
 |-------------------------------------------|---------------------------------------------------------|
-| `\r \b \f` escapes                        | decoded as the bare letter                              |
 | locals-first rule                         | `local` is accepted anywhere in a body                  |
 | type checking / declare-before-use        | no symbol or type resolution yet                        |
 | vJASS member statement after `debug` without `set`/`call` | `debug set .x = 1` reads, `debug .x = 1` doesn't |

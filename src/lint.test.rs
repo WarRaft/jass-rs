@@ -34,7 +34,7 @@ endfunction
     let diags = lint_src(src);
     assert!(diags
         .iter()
-        .any(|d| d.level == Level::Error && d.message.contains("duplicate local variable 'x'")));
+        .any(|d| d.level == Level::Warning && d.message.contains("local variable 'x' declared again")));
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn flags_missing_return() {
     let diags = lint_src(src);
     assert!(diags
         .iter()
-        .any(|d| d.level == Level::Warning && d.message.contains("no 'return' statement")));
+        .any(|d| d.level == Level::Warning && d.message.contains("doesn't on every way through it")));
 }
 
 #[test]
@@ -239,7 +239,7 @@ endfunction
     local integer x
 endfunction
 ");
-    assert!(diags.iter().any(|d| d.message.contains("duplicate")), "{diags:?}");
+    assert!(diags.iter().any(|d| d.message.contains("declared again")), "{diags:?}");
 }
 
 #[test]
@@ -395,4 +395,39 @@ endfunction
     assert_eq!(found.iter().map(|f| f.0).collect::<Vec<_>>(), [2, 5, 7, 8], "{found:?}");
     assert!(found[1].1.contains("named by 'function'") && found[2].1.contains("'Later' is called above its declaration (line 12)"), "{found:?}");
     assert!(!parser_rs::find_rule(rule::CALL_BEFORE_DECLARATION).unwrap().enabled);
+}
+
+/// `unsafe-rawcode`: a rawcode is bytes, up to its closing quote; one an
+/// editor can't keep (a control character, a line break) is written as
+/// `0x...`, the same number. Bytes the text lost are found in the file.
+#[test]
+fn unsafe_rawcodes_written_as_hex() {
+    let src = "globals\n    integer a = 'ab\nc'\n    integer b = '\u{1}'\n    integer c = 'hfoo'\n    integer d = '😀'\nendglobals\n";
+    let p = crate::parse(src).unwrap();
+    let options = Options { source: Some(src), ..Default::default() };
+    let found: Vec<_> = lint_with(&p, &options).into_iter().filter(|d| d.rule == rule::UNSAFE_RAWCODE).collect();
+    assert_eq!(found.len(), 2, "{found:?}");
+    let fixed = parser_rs::apply_edits(src, &found.iter().flat_map(|d| d.fix.clone().unwrap().edits).collect::<Vec<_>>());
+    assert!(fixed.contains("integer a = 0x61620A63") && fixed.contains("integer b = 0x01") && fixed.contains("'hfoo'") && fixed.contains("'😀'"), "{fixed}");
+    assert_eq!(crate::parse(&fixed).map(|_| ()), Ok(()));
+    // Bytes that aren't UTF-8: lost in the text (one U+FFFD each), found
+    // in the file's bytes by where the rawcode is.
+    let file: &[u8] = b"\xEF\xBB\xBFglobals\n    integer x = 'a\x95b\x95'\nendglobals\n";
+    let text = String::from_utf8_lossy(&file[3..]).into_owned();
+    let p = crate::parse(&text).unwrap();
+    let d = lint_with(&p, &Options { source: Some(&text), ..Default::default() }).into_iter().find(|d| d.rule == rule::UNSAFE_RAWCODE).unwrap();
+    assert!(d.fix.is_none());
+    let s = d.span.unwrap();
+    let bytes = rawcode_bytes_at(file, s.start_line, s.start_col).unwrap();
+    assert_eq!(hex_rawcode(&bytes), "0x61956295");
+}
+
+/// `number-overflow` leaves World Editor's "default" of a sound's real
+/// (2^32) alone, as it writes it.
+#[test]
+fn world_editors_default_real_isnt_an_overflow() {
+    let src = "function F takes nothing returns nothing\n    call SetSoundPitch(null, 4294967296.0)\n    call SetSoundPitch(null, 4294967297.0)\nendfunction\n";
+    let p = crate::parse(src).unwrap();
+    let lines: Vec<usize> = lint_with(&p, &Options { source: Some(src), ..Default::default() }).into_iter().filter(|d| d.rule == rule::NUMBER_OVERFLOW).map(|d| d.line).collect();
+    assert_eq!(lines, [3]);
 }

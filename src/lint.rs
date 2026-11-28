@@ -4,10 +4,38 @@ use std::collections::{HashMap, HashSet};
 pub use parser_rs::{Diagnostic, Level};
 use parser_rs::{rule, Fix};
 
+#[path = "lint_game.rs"]
+mod game;
+pub use game::{hex_rawcode, rawcode_bytes_at, unsafe_rawcode};
+
+/// What some rules need beyond the program: its source (`number-overflow`
+/// reads how a number is written), the game's limits for strings
+/// (`long-string`, in bytes; 0: none), which UjAPI and Reforged raise.
+#[derive(Debug, Clone, Copy)]
+pub struct Options<'a> {
+    pub source: Option<&'a str>,
+    /// A string literal's bytes at most (vanilla: 1023).
+    pub string_limit: usize,
+    /// A concatenation of string literals' bytes at most (vanilla: 4092).
+    pub concat_limit: usize,
+}
+
+impl Default for Options<'_> {
+    fn default() -> Self {
+        Options { source: None, string_limit: 1023, concat_limit: 4092 }
+    }
+}
+
 /// Runs every lint rule over a parsed program and returns the diagnostics
 /// found, sorted by source line.
 pub fn lint(program: &Program) -> Vec<Diagnostic> {
+    lint_with(program, &Options::default())
+}
+
+/// [`lint`], with `options`.
+pub fn lint_with(program: &Program, options: &Options) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
+    game::check(program, options, &mut diags);
     check_duplicate_top_level_names(program, &mut diags);
     check_declaration_order(program, &mut diags);
     check_calls_before_declarations(program, &mut diags);
@@ -388,9 +416,11 @@ fn check_function(f: &FunctionDecl, diags: &mut Vec<Diagnostic>) {
     for local in locals {
         if let Stmt::Local { name, line, .. } = local {
             if let Some(&first_line) = seen.get(name) {
-                diags.push(Diagnostic::error(rule::DUPLICATE_DECLARATION, 
+                // Legal: a local is, to the game, a parameter on its stack,
+                // found by name from the top: the last one of the name.
+                diags.push(Diagnostic::warning(rule::DUPLICATE_DECLARATION,
                     format!(
-                        "duplicate local variable '{name}' (first declared at line {first_line})"
+                        "local variable '{name}' declared again (first at line {first_line}): the game finds the last one, the earlier is unreachable (a typo?)"
                     ),
                     *line,
                 ));
@@ -409,9 +439,9 @@ fn check_function(f: &FunctionDecl, diags: &mut Vec<Diagnostic>) {
     check_stmts(&f.body, diags);
 
     if f.sig.returns.is_some() && !contains_return(&f.body) {
-        diags.push(Diagnostic::warning(rule::MISSING_RETURN, 
+        diags.push(Diagnostic::warning(rule::MISSING_RETURN,
             format!(
-                "function '{}' declares a return type but has no 'return' statement",
+                "function '{}' returns a value but doesn't on every way through it (an 'if' without 'else', a branch without 'return')",
                 f.sig.name
             ),
             f.sig.line,
@@ -529,6 +559,9 @@ fn contains_exitwhen(stmts: &[Stmt]) -> bool {
 }
 
 /// A `debug` statement doesn't count, as in [`contains_exitwhen`].
+/// Does every way through `stmts` return, as the game (pjass) sees it: a
+/// `return`, an `if` with an `else` whose every branch does, or a loop
+/// whose body does (a loop leaves only through `exitwhen`).
 fn contains_return(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| match s {
         Stmt::Return { .. } => true,
@@ -542,11 +575,8 @@ fn contains_return(stmts: &[Stmt]) -> bool {
             else_branch,
             ..
         } => {
-            branches.iter().any(|(_, body)| contains_return(body))
-                || else_branch
-                    .as_ref()
-                    .map(|b| contains_return(b))
-                    .unwrap_or(false)
+            branches.iter().all(|(_, body)| contains_return(body))
+                && else_branch.as_ref().is_some_and(|b| contains_return(b))
         }
         Stmt::Loop { body, .. } => contains_return(body),
         _ => false,

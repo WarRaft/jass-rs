@@ -29,6 +29,12 @@ pub fn in_strict_group(rule: &str) -> bool {
 /// over `env`. A rule off by default that isn't the group `strict`'s is
 /// left out; the caller applies a project's choices to the rest.
 pub fn check(files: &[(&str, &str)], env: &[&Declarations]) -> Vec<Found> {
+    check_with(files, env, &crate::lint::Options::default())
+}
+
+/// [`check`], with the lint's `options` (its limits; the source is the
+/// files glued).
+pub fn check_with(files: &[(&str, &str)], env: &[&Declarations], options: &crate::lint::Options) -> Vec<Found> {
     let mut text = String::new();
     // The first line of each file in the whole.
     let mut starts = Vec::with_capacity(files.len());
@@ -84,7 +90,8 @@ pub fn check(files: &[(&str, &str)], env: &[&Declarations]) -> Vec<Found> {
             return vec![found(d)];
         }
     };
-    let mut out: Vec<Found> = crate::lint(&program)
+    let options = crate::lint::Options { source: Some(&text), ..*options };
+    let mut out: Vec<Found> = crate::lint_with(&program, &options)
         .into_iter()
         .filter_map(|mut d| {
             if in_strict_group(d.rule) {

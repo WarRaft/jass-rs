@@ -24,6 +24,9 @@ pub const STRICT_SPEC: LexSpec = LexSpec {
     line_comment: "//",
     block_comment: None,
     rawcodes: true,
+    // The game's strings and rawcodes: a line break is part of one; a
+    // string's only escapes are `\\` and `\"`.
+    jass_literals: true,
     puncts: JASS_PUNCTS,
     ..LexSpec::BASE
 };
@@ -33,6 +36,7 @@ const JASS_PUNCTS: &[Punct] = &[
     Punct::Minus,
     Punct::Star,
     Punct::Slash,
+    Punct::Percent,
     Punct::EqEq,
     Punct::NotEq,
     Punct::Gt,
@@ -55,6 +59,7 @@ const EXTENDED_PUNCTS: &[Punct] = &[
     Punct::Minus,
     Punct::Star,
     Punct::Slash,
+    Punct::Percent,
     Punct::EqEq,
     Punct::NotEq,
     Punct::Gt,
@@ -80,6 +85,7 @@ const VJASS_PUNCTS: &[Punct] = &[
     Punct::Minus,
     Punct::Star,
     Punct::Slash,
+    Punct::Percent,
     Punct::EqEq,
     Punct::NotEq,
     Punct::Gt,

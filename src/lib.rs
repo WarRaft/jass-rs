@@ -9,12 +9,13 @@ pub mod printer;
 pub mod query;
 pub mod semantic;
 pub mod strict;
+pub mod string_hash;
 pub mod token;
 
 pub use ast::{ColumnEncoding, Program, Span};
 pub use lexer::Dialect;
 pub use html::render_html;
-pub use lint::{lint, Diagnostic, Level};
+pub use lint::{lint, lint_with, Diagnostic, Level};
 pub use parser::{ParseError, Parser};
 pub use printer::{render_dot, render_tree};
 pub use query::{find_node_at, find_node_in, AstRef};

@@ -66,5 +66,5 @@ endfunction
     assert!(diagnostics.iter().any(|d| d.message.contains("exitwhen")));
     assert!(diagnostics
         .iter()
-        .any(|d| d.message.contains("no 'return' statement")));
+        .any(|d| d.message.contains("doesn't on every way through it")));
 }

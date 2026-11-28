@@ -52,6 +52,8 @@ pub struct Signature {
     pub params: Vec<String>,
     pub returns: Option<String>,
     pub native: bool,
+    /// `constant function`, `constant native`.
+    pub constant: bool,
 }
 
 /// A global variable.
@@ -183,7 +185,7 @@ impl Declarations {
     }
 
     fn add_sig(&mut self, sig: &FunctionSig, native: bool) {
-        let s = Signature { params: sig.params.iter().map(|p| p.type_name.clone()).collect(), returns: sig.returns.clone(), native };
+        let s = Signature { params: sig.params.iter().map(|p| p.type_name.clone()).collect(), returns: sig.returns.clone(), native, constant: sig.is_constant };
         // The first one: another of the same name is a duplicate (lint),
         // or a `main` the build merges, which takes nothing as well.
         self.functions.entry(sig.name.clone()).or_insert(s);
@@ -350,8 +352,9 @@ impl Scope<'_> {
     }
 
     /// Can a value of type `from` go where `to` is wanted? `null` goes into
-    /// a handle, a string or code; an integer into a real; a type into one
-    /// it extends.
+    /// anything but a boolean (a handle, a string, code; an integer or a
+    /// real, as 0: the game's, pjass's); an integer into a real; a type
+    /// into one it extends.
     fn assignable(&self, from: &Ty, to: &str) -> bool {
         // vJASS's types (a struct's values are integers): anything.
         let unchecked = |t: &str| t == "thistype" || self.all().any(|d| d.others.contains(t));
@@ -359,7 +362,7 @@ impl Scope<'_> {
             return true;
         }
         match from {
-            Ty::Null => to == "string" || to == "code" || self.is_handle(to),
+            Ty::Null => to != "boolean",
             Ty::Nothing => false,
             Ty::Is(f) => f == to || (f == "integer" && to == "real") || self.extends(f, to),
         }
@@ -404,7 +407,7 @@ impl Ty {
 pub fn check(program: &Program, env: &[&Declarations]) -> Vec<Diagnostic> {
     let own = Declarations::of(program);
     let scope = Scope { own: &own, env };
-    let mut c = Checker { scope, out: Vec::new(), locals: HashMap::new(), returns: None, current: None };
+    let mut c = Checker { scope, out: Vec::new(), locals: HashMap::new(), returns: None, current: None, constant_fn: false, hidden_types: HashSet::new() };
     c.items(&program.items);
     c.out.sort_by_key(|d| d.line);
     c.out
@@ -429,6 +432,11 @@ struct Checker<'a> {
     /// vJASS: the struct whose method is being checked (`this`,
     /// `thistype`).
     current: Option<String>,
+    /// The function being checked is a `constant function`.
+    constant_fn: bool,
+    /// The types a parameter or a local of the function hides (named as
+    /// them): not to be named after it.
+    hidden_types: HashSet<String>,
 }
 
 /// The span of `name` at the start of `span` (a call's, an array
@@ -531,6 +539,10 @@ impl Checker<'_> {
 
     fn global(&mut self, g: &GlobalDecl) {
         self.type_name(&g.type_name, g.line);
+        if PRIMITIVES.contains(&g.name.as_str()) || self.scope.all().any(|d| d.types.contains_key(&g.name)) {
+            let d = Diagnostic::error(rule::HIDDEN_TYPE, format!("the global '{}' is named as a type, which the game doesn't allow: globals and types share their names", g.name), g.line);
+            self.push(d, None);
+        }
         if let Some(e) = &g.initializer {
             let ty = self.expr(e);
             self.expect(ty, &g.type_name, || format!("the value of '{}'", g.name), g.line, Some(e.span));
@@ -539,12 +551,41 @@ impl Checker<'_> {
 
     fn function(&mut self, f: &FunctionDecl) {
         self.signature(&f.sig);
+        for p in &f.sig.params {
+            self.shadowing(&p.name, "parameter", f.sig.line);
+        }
         self.locals = f.sig.params.iter().map(|p| (p.name.clone(), (p.type_name.clone(), false))).collect();
         collect_locals(&f.body, &mut self.locals);
         self.returns = Some(f.sig.returns.clone());
+        self.constant_fn = f.sig.is_constant;
         self.stmts(&f.body);
         self.locals.clear();
         self.returns = None;
+        self.constant_fn = false;
+        self.hidden_types.clear();
+    }
+
+    /// A parameter's or a local's name: a type's or a function's is the
+    /// game's error (`shadowed-name`); a global variable's, legal, hidden
+    /// there (`shadowed-global`).
+    fn shadowing(&mut self, name: &str, what: &str, line: usize) {
+        let ty = PRIMITIVES.contains(&name) || self.scope.all().any(|d| d.types.contains_key(name));
+        if ty {
+            // The type can't be named in the function from here.
+            self.hidden_types.insert(name.to_string());
+        }
+        if PRIMITIVES.contains(&name) {
+            // A primitive's name is the game's, as pjass has it.
+            let d = Diagnostic::error(rule::HIDDEN_TYPE, format!("the {what} '{name}' is named as the type {name}, which the game doesn't allow"), line);
+            self.push(d, None);
+        } else if ty || self.scope.all().any(|d| d.functions.contains_key(name)) {
+            let of = if ty { "a type" } else { "a function" };
+            let d = Diagnostic::warning(rule::SHADOWED_NAME, format!("the {what} '{name}' is named as {of}: legal, the context tells them apart, but confusing"), line);
+            self.push(d, None);
+        } else if self.scope.all().any(|d| d.globals.contains_key(name)) {
+            let d = Diagnostic::warning(rule::SHADOWED_GLOBAL, format!("the {what} '{name}' hides the global variable '{name}' here"), line);
+            self.push(d, None);
+        }
     }
 
     /// The variable `name`: a parameter or local, else a global. `None`
@@ -595,6 +636,19 @@ impl Checker<'_> {
             Some(None) => return None,
             Some(Some(sig)) => sig.clone(),
         };
+        if self.constant_fn && !sig.constant {
+            self.push(Diagnostic::error(rule::CONSTANT_FUNCTION, format!("a constant function calls '{name}', which isn't constant"), line), span);
+        }
+        // `Filter`, `Condition`: a function returning boolean.
+        if matches!(name, "Filter" | "Condition")
+            && let [a] = args
+            && let ExprKind::FuncRef(f) = &a.kind
+            && let Some(Some(fs)) = self.scope.function(f)
+            && fs.returns.as_deref() != Some("boolean")
+        {
+            let d = Diagnostic::warning(rule::FILTER_RETURNS_BOOLEAN, format!("'{f}' given to '{name}' doesn't return boolean"), a.span.start_line);
+            self.push(d, Some(a.span));
+        }
         if sig.params.len() != args.len() {
             let takes = match sig.params.len() {
                 0 => "nothing".to_string(),
@@ -626,6 +680,11 @@ impl Checker<'_> {
         match s {
             Stmt::Local { type_name, name, initializer, line, .. } => {
                 self.type_name(type_name, *line);
+                if self.hidden_types.contains(type_name) {
+                    let d = Diagnostic::error(rule::HIDDEN_TYPE, format!("the type '{type_name}' is named after a parameter or a local of its name hid it: the game can't read it here"), *line);
+                    self.push(d, None);
+                }
+                self.shadowing(name, "local", *line);
                 if let Some(e) = initializer {
                     let ty = self.expr(e);
                     self.expect(ty, type_name, || format!("the value of '{name}'"), *line, Some(e.span));
@@ -633,6 +692,10 @@ impl Checker<'_> {
             }
             Stmt::Set { name, index, op, value, line, .. } => {
                 let var = self.var(name, *line, None);
+                if self.constant_fn && var.is_some() && !self.locals.contains_key(name) {
+                    let d = Diagnostic::error(rule::CONSTANT_FUNCTION, format!("a constant function sets the global '{name}'"), *line);
+                    self.push(d, None);
+                }
                 if let Some(i) = index {
                     self.index(i);
                 }
@@ -676,7 +739,22 @@ impl Checker<'_> {
             Stmt::Return { value, line } => {
                 let ty = value.as_ref().map(|v| self.expr(v));
                 match (self.returns.clone().flatten(), value) {
-                    (Some(want), Some(v)) => self.expect(ty.flatten(), &want, || "the value returned".to_string(), *line, Some(v.span)),
+                    (Some(want), Some(v)) => {
+                        let ty = ty.flatten();
+                        // What converts elsewhere and not in a `return`: an
+                        // integer to a real, null to a number, boolean or code.
+                        let no = match &ty {
+                            Some(Ty::Is(t)) if t == "integer" && want == "real" => Some("an integer"),
+                            Some(Ty::Null) if matches!(want.as_str(), "integer" | "real" | "code") => Some("null"),
+                            _ => None,
+                        };
+                        if let Some(what) = no {
+                            let d = Diagnostic::error(rule::RETURN_CONVERSION, format!("{what} returned where {want} is wanted: the game converts it in a 'set', not in a 'return'"), *line);
+                            self.push(d, Some(v.span));
+                        } else {
+                            self.expect(ty, &want, || "the value returned".to_string(), *line, Some(v.span));
+                        }
+                    }
                     (None, Some(v)) => {
                         self.mismatch("the function returns nothing: 'return' takes no value here".to_string(), *line, Some(v.span))
                     }
@@ -751,6 +829,10 @@ impl Checker<'_> {
             ExprKind::FuncRef(name) => {
                 match self.scope.function(name) {
                     None => self.unknown("the function", name, line, Some(e.span)),
+                    Some(Some(sig)) if sig.native => {
+                        let d = Diagnostic::error(rule::NATIVE_AS_CODE, format!("'function {name}' is a native: the game can't run it as code"), line);
+                        self.push(d, Some(e.span));
+                    }
                     Some(Some(sig)) if !sig.params.is_empty() => {
                         let d = Diagnostic::error(
                             rule::ARGUMENT_COUNT,
@@ -882,6 +964,15 @@ impl Checker<'_> {
                     self.mismatch(format!("{} and {} can't be compared by size: numbers can", article(x.name()), article(y.name())), line, span);
                 }
                 Some(Ty::of("boolean"))
+            }
+            // `%`: integers only.
+            BinOp::Mod => {
+                let (x, y) = (ta?, tb?);
+                let bad = if !x.is("integer") { Some(&x) } else if !y.is("integer") { Some(&y) } else { None };
+                if let Some(bad) = bad {
+                    self.mismatch(format!("'%' takes integers, not {}", article(bad.name())), line, span);
+                }
+                Some(Ty::of("integer"))
             }
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
                 let (x, y) = (ta?, tb?);

@@ -479,6 +479,8 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    /// `%`: integers only (patches from 1.29; `modulo-operator`).
+    Mod,
     Eq,
     NotEq,
     Gt,

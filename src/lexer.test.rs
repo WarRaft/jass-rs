@@ -85,15 +85,18 @@ fn dollar_hex_integers() {
     );
 }
 
+/// The game's escapes, as pjass has them: `\b \t \r \n \f \" \\`; any
+/// other an error.
 #[test]
 fn tokenizes_string_literal_with_escapes() {
     assert_eq!(
-        kinds(r#""hello\nworld""#),
+        kinds(r#""hello\nworld \\ \" end""#),
         vec![
-            TokenKind::Str("hello\nworld".to_string()),
+            TokenKind::Str("hello\nworld \\ \" end".to_string()),
             TokenKind::Eof,
         ]
     );
+    assert!(Lexer::tokenize(r#""UI\FrameDef""#).is_err());
 }
 
 #[test]
@@ -148,7 +151,7 @@ fn reports_unterminated_string() {
 #[test]
 fn reports_invalid_rawcode_length() {
     let err = Lexer::tokenize("'ab'").unwrap_err();
-    assert!(err.message.contains("must be 1 or 4 characters"));
+    assert!(err.message.contains("must be 1 or 4 bytes, not 2"), "{}", err.message);
 }
 
 #[test]

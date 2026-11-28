@@ -9,6 +9,10 @@ pub struct Parser {
     ts: TokenStream<TokenKind>,
     /// vJASS: what only it writes is read (`a[i][j]`, `T(x)[i]`).
     vjass: bool,
+    /// Strict JASS: where a line may start (the positions of the tokens
+    /// that begin a declaration, a statement, or end a block), recorded to
+    /// check the line breaks once the program is read ([`check_lines`]).
+    lines: Option<Vec<usize>>,
 }
 
 impl TokenParser for Parser {
@@ -24,6 +28,7 @@ impl Parser {
         Parser {
             ts: TokenStream::new(tokens),
             vjass: false,
+            lines: None,
         }
     }
 
@@ -33,10 +38,41 @@ impl Parser {
 
     pub fn parse_str_with(src: &str, dialect: Dialect) -> Result<Program, ParseError> {
         // A textmacro's or novjass's block isn't code of its place.
-        let tokens = Lexer::tokenize_with(src, dialect)?.into_iter().filter(|t| !matches!(&t.kind, TokenKind::Embedded(b) if b.lang != "zinc")).collect();
+        // A NUL: the game reads no further.
+        if let Some(at) = src.find('\0') {
+            let line = src[..at].matches('\n').count() + 1;
+            let col = src[..at].rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+            return Err(ParseError::at("a NUL character: the game reads no further", line, col));
+        }
+        // Strict JASS: a lone carriage return breaks a line, as the game
+        // (and pjass) reads it.
+        let normalized;
+        let src = if dialect == Dialect::Strict && src.contains('\r') {
+            normalized = lone_cr(src);
+            normalized.as_str()
+        } else {
+            src
+        };
+        let tokens: Vec<Token> = Lexer::tokenize_with(src, dialect)?.into_iter().filter(|t| !matches!(&t.kind, TokenKind::Embedded(b) if b.lang != "zinc")).collect();
+        let places: Vec<(usize, usize, usize)> = tokens.iter().map(|t| (t.line, t.col, t.end_line)).collect();
         let mut p = Parser::new(tokens);
         p.vjass = dialect == Dialect::VJass;
-        p.program()
+        if dialect == Dialect::Strict {
+            p.lines = Some(Vec::new());
+        }
+        let program = p.program()?;
+        if let Some(starts) = &p.lines {
+            check_lines(&places, starts)?;
+        }
+        Ok(program)
+    }
+
+    /// Strict JASS: a line may start here (see [`Parser::lines`]).
+    fn line_may_start(&mut self) {
+        let at = self.ts.mark();
+        if let Some(l) = &mut self.lines {
+            l.push(at);
+        }
     }
 
     fn peek(&self) -> &Token {
@@ -83,7 +119,11 @@ impl Parser {
 
     pub fn program(&mut self) -> Result<Program, ParseError> {
         let mut items = Vec::new();
-        while !self.check(&TokenKind::Eof) {
+        loop {
+            self.line_may_start();
+            if self.check(&TokenKind::Eof) {
+                break;
+            }
             items.push(self.top_level()?);
         }
         Ok(Program { items })
@@ -486,7 +526,11 @@ impl Parser {
     fn globals_block(&mut self) -> Result<TopLevel, ParseError> {
         self.expect(TokenKind::Keyword(Kw::Globals))?;
         let mut decls = Vec::new();
-        while !self.check(&TokenKind::Keyword(Kw::EndGlobals)) {
+        loop {
+            self.line_may_start();
+            if self.check(&TokenKind::Keyword(Kw::EndGlobals)) {
+                break;
+            }
             if self.check(&TokenKind::Eof) {
                 return Err(self.error("unexpected end of file inside globals block"));
             }
@@ -622,6 +666,7 @@ impl Parser {
     fn stmt_block(&mut self, stop: &[TokenKind]) -> Result<Vec<Stmt>, ParseError> {
         let mut stmts = Vec::new();
         loop {
+            self.line_may_start();
             // `debug else`, `debug endif` ...: a `debug if`'s written a line
             // at a time, as JassHelper takes them (each `debug` line
             // there in debug mode only, the `if` with them).
@@ -1144,6 +1189,7 @@ impl Parser {
             |k| match k {
                 TokenKind::Punct(Punct::Star) => Some(BinOp::Mul),
                 TokenKind::Punct(Punct::Slash) => Some(BinOp::Div),
+                TokenKind::Punct(Punct::Percent) => Some(BinOp::Mod),
                 _ => None,
             },
             binary,
@@ -1190,7 +1236,14 @@ impl Parser {
     /// vJASS: what follows an operand: `.name`, `.name(args)`, `[index]`.
     fn postfix(&mut self, mut e: Expr) -> Result<Expr, ParseError> {
         loop {
-            if self.ts.eat(&TokenKind::Punct(Punct::Dot)) {
+            // A `.` that starts a line starts a statement (`.x = 1`, this's),
+            // not a member of what's above: a line break there isn't read
+            // through.
+            // (`.x` itself: `this`, written nowhere, begins at that `.`.)
+            let dot = self.peek();
+            let own = e.span.start_line == dot.line && e.span.start_col == dot.col;
+            let line_start = !own && dot.line > self.ts.prev().end_line;
+            if !line_start && self.ts.eat(&TokenKind::Punct(Punct::Dot)) {
                 let tok = self.peek().clone();
                 let name = self.member_name()?;
                 if self.ts.eat(&TokenKind::Punct(Punct::LParen)) {
@@ -1324,6 +1377,82 @@ fn tok_span(tok: &Token) -> Span {
 fn binary(left: Expr, op: BinOp, right: Expr) -> Expr {
     let span = left.span.join(right.span);
     Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span)
+}
+
+
+/// `src` with every carriage return not before a line feed made one, as
+/// the game reads a line: but in a comment (which only a line feed ends)
+/// and in a string or a rawcode (whose quote takes it).
+fn lone_cr(src: &str) -> String {
+    #[derive(PartialEq)]
+    enum In {
+        Code,
+        Comment,
+        Quote(char),
+    }
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    let mut state = In::Code;
+    while let Some(c) = chars.next() {
+        match state {
+            In::Code => match c {
+                '/' if chars.peek() == Some(&'/') => state = In::Comment,
+                '"' | '\'' => state = In::Quote(c),
+                '\r' if chars.peek() != Some(&'\n') => {
+                    out.push('\n');
+                    continue;
+                }
+                _ => {}
+            },
+            In::Comment if c == '\n' => state = In::Code,
+            In::Comment => {}
+            In::Quote(q) => {
+                if c == '\\' && matches!(chars.peek(), Some('\\' | '"')) {
+                    out.push(c);
+                    out.push(chars.next().expect("peeked"));
+                    continue;
+                }
+                if c == q {
+                    state = In::Code;
+                }
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Strict JASS's line breaks: a line break ends a declaration or a
+/// statement, and stands nowhere else but in a string or a rawcode (which
+/// end on a later line: `places` are each token's line, column and end
+/// line). So a token that starts a line must be where a line may start
+/// (`starts`, recorded as the program's read), and a token there must
+/// start a line: one statement a line.
+fn check_lines(places: &[(usize, usize, usize)], starts: &[usize]) -> Result<(), ParseError> {
+    let starts: std::collections::HashSet<usize> = starts.iter().copied().collect();
+    // The last token is the end of the file.
+    for i in 1..places.len().saturating_sub(1) {
+        let (line, col, _) = places[i];
+        let new_line = line > places[i - 1].2;
+        match (new_line, starts.contains(&i)) {
+            (true, false) => {
+                return Err(ParseError::at(
+                    "a line break inside a statement: strict JASS, the game's, ends a declaration or a statement at its line's end (a line break stands only in a string or a rawcode)",
+                    line,
+                    col,
+                ));
+            }
+            (false, true) => {
+                return Err(ParseError::at(
+                    "a second statement on the line: strict JASS, the game's, reads one declaration or statement a line",
+                    line,
+                    col,
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

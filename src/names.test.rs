@@ -28,7 +28,7 @@ fn found(src: &str, env: &[&Declarations]) -> Vec<(usize, &'static str, String)>
 fn declarations_of_a_program() {
     let d = env();
     assert_eq!(d.types.get("unit").map(String::as_str), Some("widget"));
-    assert_eq!(d.functions["KillUnit"], Signature { params: vec!["unit".into()], returns: None, native: true });
+    assert_eq!(d.functions["KillUnit"], Signature { params: vec!["unit".into()], returns: None, native: true, constant: false });
     assert!(d.globals["bj_MAX"].constant);
 }
 
@@ -48,7 +48,10 @@ function F
         timer t
         t = null
     endif
-    Condition(function F)
+    Condition(function B)
+endfunction
+function B returns boolean
+    return true
 endfunction
 ";
     assert_eq!(found(src, &[&common]), []);
@@ -80,6 +83,7 @@ endfunction
             (7, rule::UNKNOWN_NAME, "the variable 'missing' is declared nowhere".to_string()),
             (8, rule::UNKNOWN_NAME, "the variable 'arr' is declared nowhere".to_string()),
             (9, rule::ARGUMENT_COUNT, "'function G' is a code value, and 'G' takes arguments: a code value's function takes nothing".to_string()),
+            (9, rule::FILTER_RETURNS_BOOLEAN, "'G' given to 'Condition' doesn't return boolean".to_string()),
             (10, rule::UNKNOWN_NAME, "the function 'Gone' is declared nowhere".to_string()),
         ]
     );
@@ -456,4 +460,15 @@ fn compound_assignments_are_typed_as_their_sum() {
     let src = "function F takes nothing returns nothing\n    local integer i = 0\n    local real r = 0\n    local string s = \"\"\n    local boolean b = false\n    set i += 1\n    set r -= i\n    set s += I2S(i)\n    set i += 1.5\n    set b += 1\n    set s -= \"a\"\nendfunction\n";
     let lines: Vec<usize> = found(src, &[&env()]).into_iter().map(|(l, _, _)| l).collect();
     assert_eq!(lines, [9, 10, 11], "{:?}", found(src, &[&env()]));
+}
+
+/// A variable named as a type: a primitive's name is the game's error
+/// (`hidden-type`, as pjass); a declared type's or a function's, legal
+/// but confusing (`shadowed-name`, a warning); the type named after it,
+/// an error.
+#[test]
+fn variables_named_as_types() {
+    let src = "type effect extends handle\nfunction F takes nothing returns nothing\n    local integer integer\n    local effect effect\n    local effect sfx\n    local real F\nendfunction\n";
+    let got: Vec<(usize, &str)> = found(src, &[]).into_iter().map(|(l, r, _)| (l, r)).collect();
+    assert_eq!(got, [(3, rule::HIDDEN_TYPE), (4, rule::SHADOWED_NAME), (5, rule::HIDDEN_TYPE), (6, rule::SHADOWED_NAME)], "{:?}", found(src, &[]));
 }

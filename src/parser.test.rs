@@ -655,3 +655,43 @@ fn extended_jass_compound_assignments() {
     let rendered = format!("{s:?}");
     assert!(rendered.contains("op: Some(Add)") && rendered.contains("op: Some(Sub)"), "{rendered}");
 }
+
+/// A line break: in extended JASS anywhere it can be read one way only
+/// (inside a statement that can't have ended); in strict JASS, the game's,
+/// it ends a declaration or a statement, and stands only in a string or a
+/// rawcode (both dialects read those so).
+#[test]
+fn line_breaks_extended_and_strict() {
+    let split = "function F takes boolean a, boolean b\n    returns nothing\n    if\n    a\n    and\n    b\n    then\n        call F(\n            a,\n            b)\n    endif\nendfunction\n";
+    assert!(Parser::parse_str_with(split, Dialect::Jass).is_ok());
+    let e = Parser::parse_str_with(split, Dialect::Strict).unwrap_err();
+    assert_eq!((e.line, e.col), (2, 5), "{}", e.message);
+    assert!(e.message.contains("a line break inside a statement"), "{}", e.message);
+    // One statement a line in strict JASS.
+    let one_line = "function F takes nothing returns nothing\n    if true then\n        call F()\n    endif\n    if true then call F() endif\nendfunction\n";
+    assert!(Parser::parse_str_with(one_line, Dialect::Jass).is_ok());
+    let e = Parser::parse_str_with(one_line, Dialect::Strict).unwrap_err();
+    assert!(e.line == 5 && e.message.contains("a second statement on the line"), "{}: {}", e.line, e.message);
+    // A string and a rawcode may hold a line break, in either.
+    let literals = "globals\n    string s = \"a\nb\"\n    integer r = 'ab\nc'\nendglobals\nfunction F takes nothing returns nothing\nendfunction\n";
+    for d in [Dialect::Strict, Dialect::Jass] {
+        let p = Parser::parse_str_with(literals, d).unwrap_or_else(|e| panic!("{d:?}: {}: {}", e.line, e.message));
+        let TopLevel::Globals(g) = &p.items[0] else { panic!() };
+        assert_eq!(g[0].initializer.as_ref().map(|e| e.kind.clone()), Some(ExprKind::StringLiteral("a\nb".into())));
+        assert_eq!(g[1].line, 4);
+    }
+    // `return`'s value starts on its line: the next line is a statement.
+    let ret = "function G takes nothing returns nothing\nendfunction\nfunction F takes nothing returns nothing\n    return\n    G()\nendfunction\n";
+    let TopLevel::Function(f) = &Parser::parse_str_with(ret, Dialect::Jass).unwrap().items[1] else { panic!() };
+    assert!(matches!(f.body[..], [Stmt::Return { value: None, .. }, Stmt::Call { .. }]), "{:?}", f.body);
+}
+
+/// vJASS: a `.` starting a line starts a statement (`.x = 1`), not a
+/// member of the line above.
+#[test]
+fn a_dot_starting_a_line_starts_a_statement() {
+    let src = "struct S\n    integer x\n    integer y\n    method m takes nothing returns nothing\n        set .y = this\n        .x = 1\n        set .y = this.x\n    endmethod\nendstruct\n";
+    let p = Parser::parse_str_with(src, Dialect::VJass).unwrap_or_else(|e| panic!("{}: {}", e.line, e.message));
+    let rendered = format!("{p:?}");
+    assert_eq!(rendered.matches("SetMember").count(), 3, "{rendered}");
+}
