@@ -90,7 +90,7 @@ pub fn check_with(files: &[(&str, &str)], env: &[&Declarations], options: &crate
             return vec![found(d)];
         }
     };
-    let options = crate::lint::Options { source: Some(&text), ..*options };
+    let options = crate::lint::Options { source: Some(&text), strict: true, ..*options };
     let mut out: Vec<Found> = crate::lint_with(&program, &options)
         .into_iter()
         .filter_map(|mut d| {

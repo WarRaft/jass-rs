@@ -1383,7 +1383,7 @@ fn binary(left: Expr, op: BinOp, right: Expr) -> Expr {
 /// `src` with every carriage return not before a line feed made one, as
 /// the game reads a line: but in a comment (which only a line feed ends)
 /// and in a string or a rawcode (whose quote takes it).
-fn lone_cr(src: &str) -> String {
+pub(crate) fn lone_cr(src: &str) -> String {
     #[derive(PartialEq)]
     enum In {
         Code,

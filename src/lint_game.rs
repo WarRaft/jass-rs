@@ -70,8 +70,9 @@ pub(super) fn check(program: &Program, options: &Options, diags: &mut Vec<Diagno
         }
     }
     let mut concat_seen: HashSet<(usize, usize)> = HashSet::new();
+    let source = options.source.map(|text| Source::new(text, options.strict));
     while let Some(e) = exprs.pop() {
-        expression(e, options, &mut hashes, &mut concat_seen, diags);
+        expression(e, options, source.as_ref(), &mut hashes, &mut concat_seen, diags);
         exprs.extend(e.children());
     }
     // Calls written as statements: their arguments are expressions above;
@@ -366,7 +367,7 @@ fn literal_concat(e: &Expr) -> Option<usize> {
     }
 }
 
-fn expression(e: &Expr, options: &Options, hashes: &mut HashMap<i32, (String, usize)>, concat_seen: &mut HashSet<(usize, usize)>, diags: &mut Vec<Diagnostic>) {
+fn expression(e: &Expr, options: &Options, source: Option<&Source>, hashes: &mut HashMap<i32, (String, usize)>, concat_seen: &mut HashSet<(usize, usize)>, diags: &mut Vec<Diagnostic>) {
     let line = e.span.start_line;
     match &e.kind {
         ExprKind::Call(name, args) => {
@@ -406,14 +407,14 @@ fn expression(e: &Expr, options: &Options, hashes: &mut HashMap<i32, (String, us
                 }
             }
         }
-        ExprKind::IntLiteral(_) if options.source.and_then(|src| text_of(src, e.span)).is_some_and(|t| t.starts_with('\'')) => {
-            let text = options.source.and_then(|src| text_of(src, e.span)).unwrap_or_default();
+        ExprKind::IntLiteral(_) if source.and_then(|src| src.text_of(e.span)).is_some_and(|t| t.starts_with('\'')) => {
+            let text = source.and_then(|src| src.text_of(e.span)).unwrap_or_default();
             if let Some(d) = unsafe_rawcode(text, e.span) {
                 diags.push(d);
             }
         }
         ExprKind::IntLiteral(v) if *v > i64::from(i32::MAX) => {
-            let written = options.source.and_then(|src| text_at(src, e.span));
+            let written = source.and_then(|src| src.text_at(e.span));
             if written.is_some() {
                 diags.push(Diagnostic::warning(rule::NUMBER_OVERFLOW, format!("{} is more than an integer holds (2147483647): the game cuts it", written.unwrap_or_default()), line).at(e.span));
             }
@@ -421,7 +422,7 @@ fn expression(e: &Expr, options: &Options, hashes: &mut HashMap<i32, (String, us
         ExprKind::RealLiteral(_) => {
             // World Editor's "default" of a sound's real (`war3map.w3s`:
             // 2^32, `SetSoundPitch(s, 4294967296.0)`): as it writes it.
-            if let Some(t) = options.source.and_then(|src| text_at(src, e.span))
+            if let Some(t) = source.and_then(|src| src.text_at(e.span))
                 && t != "4294967296.0"
                 && !real_fits(t)
             {
@@ -432,14 +433,56 @@ fn expression(e: &Expr, options: &Options, hashes: &mut HashMap<i32, (String, us
     }
 }
 
-/// The text at `span` (columns from 1, lines too; several lines), in `src`.
-fn text_of(src: &str, span: Span) -> Option<&str> {
-    let offset = |line: usize, col: usize| -> Option<usize> {
-        let start = if line == 1 { 0 } else { src.match_indices('\n').nth(line.checked_sub(2)?).map(|(i, _)| i + 1)? };
-        let rest = &src[start..];
-        Some(start + rest.char_indices().nth(col.checked_sub(1)?).map_or(rest.len(), |(i, _)| i))
-    };
-    src.get(offset(span.start_line, span.start_col)?..offset(span.end_line, span.end_col)?)
+/// The source text with where each of its lines starts, so the text at
+/// a span is found without reading the file from its top each time (a
+/// map's script of megabytes has hundreds of thousands of literals).
+/// Strict JASS is the text the parser read (`parser::lone_cr`: a lone
+/// carriage return in code breaks a line), so its spans' lines are found.
+struct Source<'a> {
+    text: std::borrow::Cow<'a, str>,
+    /// The byte offset of each line's start, line 1 first.
+    starts: Vec<usize>,
+}
+
+impl<'a> Source<'a> {
+    fn new(text: &'a str, strict: bool) -> Source<'a> {
+        let text = if strict && text.contains('\r') { std::borrow::Cow::Owned(crate::parser::lone_cr(text)) } else { std::borrow::Cow::Borrowed(text) };
+        let starts = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
+        Source { text, starts }
+    }
+
+    /// The byte offset where line `line` (from 1) starts.
+    fn line_start(&self, line: usize) -> Option<usize> {
+        self.starts.get(line.checked_sub(1)?).copied()
+    }
+
+    /// The text at `span` (columns from 1, lines too; several lines).
+    fn text_of(&self, span: Span) -> Option<&str> {
+        let offset = |line: usize, col: usize| -> Option<usize> {
+            let start = self.line_start(line)?;
+            let rest = &self.text[start..];
+            Some(start + rest.char_indices().nth(col.checked_sub(1)?).map_or(rest.len(), |(i, _)| i))
+        };
+        self.text.get(offset(span.start_line, span.start_col)?..offset(span.end_line, span.end_col)?)
+    }
+
+    /// The text at `span` when it's on one line (as `str::lines` gives the
+    /// line: without its `\n` or `\r\n`).
+    fn text_at(&self, span: Span) -> Option<&str> {
+        if span.start_line != span.end_line {
+            return None;
+        }
+        let start = self.line_start(span.start_line)?;
+        let end = self.line_start(span.start_line + 1).unwrap_or(self.text.len());
+        if start >= self.text.len() {
+            return None;
+        }
+        let line = &self.text[start..end];
+        let line = line.strip_suffix('\n').map_or(line, |l| l.strip_suffix('\r').unwrap_or(l));
+        let from = line.char_indices().nth(span.start_col.checked_sub(1)?).map(|(i, _)| i)?;
+        let to = line.char_indices().nth(span.end_col.checked_sub(1)?).map_or(line.len(), |(i, _)| i);
+        line.get(from..to)
+    }
 }
 
 /// Is `c` one an editor can't show or keep in a rawcode: a control
@@ -476,21 +519,14 @@ pub fn hex_rawcode(bytes: &[u8]) -> String {
     format!("0x{hex}")
 }
 
-/// The text at `span` (one line, columns from 1), in `src`.
-fn text_at(src: &str, span: Span) -> Option<&str> {
-    if span.start_line != span.end_line {
-        return None;
-    }
-    let line = src.lines().nth(span.start_line.checked_sub(1)?)?;
-    let start = line.char_indices().nth(span.start_col.checked_sub(1)?).map(|(i, _)| i)?;
-    let end = line.char_indices().nth(span.end_col.checked_sub(1)?).map_or(line.len(), |(i, _)| i);
-    line.get(start..end)
-}
-
 /// Does a real literal fit the game's parser (pjass's `validate_real_lit`):
 /// its integer part and its fraction's digits in 32-bit integers?
 fn real_fits(text: &str) -> bool {
     let (int, frac) = text.split_once('.').unwrap_or((text, ""));
+    // Not a number as written: not this rule's to judge.
+    if !int.bytes().chain(frac.bytes()).all(|c| c.is_ascii_digit()) {
+        return true;
+    }
     let mut result: i32 = 0;
     for c in int.bytes() {
         let Some(r) = result.checked_mul(10).and_then(|r| r.checked_add(i32::from(c - b'0'))) else { return false };
@@ -542,3 +578,7 @@ pub fn rawcode_bytes_at(file: &[u8], line: usize, col: usize) -> Option<Vec<u8>>
     let end = file[at + 1..].iter().position(|&b| b == b'\'')? + at + 1;
     Some(file[at + 1..end].to_vec())
 }
+
+#[cfg(test)]
+#[path = "lint_game.test.rs"]
+mod tests;
