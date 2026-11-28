@@ -489,8 +489,13 @@ strict JASS reads them as pjass does, but for these, decided otherwise:
   file).
 - **The return bug** (pjass's `+rb`) was closed in 1.24: not read.
 - `%` is an operator (integers only; `modulo-operator`, off, for patches
-  before 1.29). A lone carriage return breaks a line in strict JASS, but
-  in a comment; a byte-order mark anywhere is whitespace; a NUL ends what
+  before 1.29). `\r\n`, `\n` and a lone carriage return each break a
+  line, in every dialect and everywhere, a `//` comment too
+  (`parser_rs::lines`). pjass ends a comment only at `\n` (its tests
+  `comment-strangeness.j`, `comments-only-end-in-lf.j`): taken for a
+  mistake of pjass's author, nothing shows the game reads so; what the
+  game does with a lone `\r` needs tests run in the game itself. A
+  byte-order mark anywhere is whitespace; a NUL ends what
   the game reads: an error.
 
 `lint::Options` gives the rules what's beyond the program: its source

@@ -37,6 +37,13 @@ const DIFFERENT: &[(&str, &str)] = &[
     ("should-check/flags/rb-annotation-2.j", "the return bug isn't allowed"),
     ("should-check/flags/exploit-1.j", "the return bug isn't allowed"),
     ("should-check/flags/exploit-2.j", "the return bug isn't allowed"),
+    // `\r\n`, `\n` and a lone `\r` each end a line, everywhere: a `//`
+    // comment too, one rule for the editor (VS Code counts a lone `\r` a
+    // break) and the code (user, 2026-11-28). pjass's comment ending only
+    // at `\n` is taken for a mistake of its author: nothing shows the game
+    // reads so. Settled only by tests run in the game itself.
+    ("should-check/pjass-tests/comment-strangeness.j", "a lone carriage return ends a comment"),
+    ("should-fail/pjass-tests/comments-only-end-in-lf.j", "a lone carriage return ends a comment"),
     // `+nosyntaxerror`: errors are errors.
     ("should-check/flags/absolute-garbage.j", "errors aren't switched off"),
 ];

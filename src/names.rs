@@ -253,7 +253,7 @@ impl Declarations {
 /// comment that's only a rule (`//=====`, `//-----`) isn't one, and a
 /// rule above ends the comment (it's a section's).
 pub fn comment_of(src: &str, line: usize) -> String {
-    let lines: Vec<&str> = src.lines().collect();
+    let lines: Vec<&str> = parser_rs::lines::lines(src).collect();
     let text = |l: &str| l.trim().strip_prefix("//").map(|c| c.trim().to_string());
     let rule = |c: &str| !c.is_empty() && c.chars().all(|ch| matches!(ch, '=' | '-' | '*' | '/' | '#' | '~' | '_'));
     let mut above = Vec::new();

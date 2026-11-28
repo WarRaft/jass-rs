@@ -70,7 +70,7 @@ pub(super) fn check(program: &Program, options: &Options, diags: &mut Vec<Diagno
         }
     }
     let mut concat_seen: HashSet<(usize, usize)> = HashSet::new();
-    let source = options.source.map(|text| Source::new(text, options.strict));
+    let source = options.source.map(Source::new);
     while let Some(e) = exprs.pop() {
         expression(e, options, source.as_ref(), &mut hashes, &mut concat_seen, diags);
         exprs.extend(e.children());
@@ -436,19 +436,17 @@ fn expression(e: &Expr, options: &Options, source: Option<&Source>, hashes: &mut
 /// The source text with where each of its lines starts, so the text at
 /// a span is found without reading the file from its top each time (a
 /// map's script of megabytes has hundreds of thousands of literals).
-/// Strict JASS is the text the parser read (`parser::lone_cr`: a lone
-/// carriage return in code breaks a line), so its spans' lines are found.
+/// Lines end as the lexer ends them (`parser_rs::lines`: `\r\n`, `\n`,
+/// a lone `\r`).
 struct Source<'a> {
-    text: std::borrow::Cow<'a, str>,
+    text: &'a str,
     /// The byte offset of each line's start, line 1 first.
     starts: Vec<usize>,
 }
 
 impl<'a> Source<'a> {
-    fn new(text: &'a str, strict: bool) -> Source<'a> {
-        let text = if strict && text.contains('\r') { std::borrow::Cow::Owned(crate::parser::lone_cr(text)) } else { std::borrow::Cow::Borrowed(text) };
-        let starts = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
-        Source { text, starts }
+    fn new(text: &'a str) -> Source<'a> {
+        Source { text, starts: parser_rs::lines::line_starts(text) }
     }
 
     /// The byte offset where line `line` (from 1) starts.
@@ -457,7 +455,7 @@ impl<'a> Source<'a> {
     }
 
     /// The text at `span` (columns from 1, lines too; several lines).
-    fn text_of(&self, span: Span) -> Option<&str> {
+    fn text_of(&self, span: Span) -> Option<&'a str> {
         let offset = |line: usize, col: usize| -> Option<usize> {
             let start = self.line_start(line)?;
             let rest = &self.text[start..];
@@ -468,7 +466,7 @@ impl<'a> Source<'a> {
 
     /// The text at `span` when it's on one line (as `str::lines` gives the
     /// line: without its `\n` or `\r\n`).
-    fn text_at(&self, span: Span) -> Option<&str> {
+    fn text_at(&self, span: Span) -> Option<&'a str> {
         if span.start_line != span.end_line {
             return None;
         }
@@ -478,7 +476,8 @@ impl<'a> Source<'a> {
             return None;
         }
         let line = &self.text[start..end];
-        let line = line.strip_suffix('\n').map_or(line, |l| l.strip_suffix('\r').unwrap_or(l));
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
         let from = line.char_indices().nth(span.start_col.checked_sub(1)?).map(|(i, _)| i)?;
         let to = line.char_indices().nth(span.end_col.checked_sub(1)?).map_or(line.len(), |(i, _)| i);
         line.get(from..to)
@@ -552,7 +551,9 @@ fn real_fits(text: &str) -> bool {
 /// text lost. `None` when there's no rawcode there.
 pub fn rawcode_bytes_at(file: &[u8], line: usize, col: usize) -> Option<Vec<u8>> {
     let file = file.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(file);
-    let start = if line == 1 { 0 } else { file.iter().enumerate().filter(|(_, b)| **b == b'\n').nth(line.checked_sub(2)?)?.0 + 1 };
+    // Where the line starts, every break counted (`parser_rs::lines`).
+    let breaks = file.iter().enumerate().filter(|&(i, &b)| b == b'\n' || (b == b'\r' && file.get(i + 1) != Some(&b'\n')));
+    let start = if line == 1 { 0 } else { breaks.map(|(i, _)| i + 1).nth(line.checked_sub(2)?)? };
     let mut at = start;
     let mut chars = 0;
     // The byte of the `col`-th character, as lossy reading counts them.

@@ -18,15 +18,11 @@ pub struct Options<'a> {
     pub string_limit: usize,
     /// A concatenation of string literals' bytes at most (vanilla: 4092).
     pub concat_limit: usize,
-    /// The program was parsed as strict JASS (`Dialect::Strict`), which
-    /// reads a lone carriage return as a line break: `source`'s lines are
-    /// counted so too.
-    pub strict: bool,
 }
 
 impl Default for Options<'_> {
     fn default() -> Self {
-        Options { source: None, string_limit: 1023, concat_limit: 4092, strict: false }
+        Options { source: None, string_limit: 1023, concat_limit: 4092 }
     }
 }
 

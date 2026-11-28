@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn source_finds_text_by_line_and_column() {
-    let src = Source::new("set a = 'Ab'\r\nset b = 1.5\nx\n", false);
+    let src = Source::new("set a = 'Ab'\r\nset b = 1.5\nx\n");
     assert_eq!(src.text_of(Span::new(1, 9, 1, 13)), Some("'Ab'"));
     assert_eq!(src.text_at(Span::new(2, 9, 2, 12)), Some("1.5"));
     // To the end of the line, without its line break.
@@ -17,19 +17,18 @@ fn source_finds_text_by_line_and_column() {
 
 #[test]
 fn source_counts_columns_in_characters() {
-    let src = Source::new("// ё\nset s = 'ё'\n", false);
+    let src = Source::new("// ё\nset s = 'ё'\n");
     assert_eq!(src.text_of(Span::new(2, 9, 2, 12)), Some("'ё'"));
     assert_eq!(src.text_at(Span::new(2, 9, 2, 12)), Some("'ё'"));
 }
 
 #[test]
-fn strict_source_breaks_lines_at_a_lone_carriage_return() {
-    // As the parser reads strict JASS: a lone `\r` in code ends a line,
-    // not in a comment or a string.
+fn source_breaks_lines_at_a_lone_carriage_return() {
+    // As the lexer reads any code: a lone `\r` ends a line, a comment's too.
     let text = "globals\rreal r = 1.5 // a\rb\rendglobals\r";
-    let src = Source::new(text, true);
+    let src = Source::new(text);
     assert_eq!(src.text_at(Span::new(2, 10, 2, 13)), Some("1.5"));
-    assert_eq!(Source::new(text, false).text_at(Span::new(2, 10, 2, 13)), None);
+    assert_eq!(src.text_at(Span::new(3, 1, 3, 2)), Some("b"));
 }
 
 /// A map's script with lone carriage returns (protected maps have them):
@@ -38,7 +37,7 @@ fn strict_source_breaks_lines_at_a_lone_carriage_return() {
 fn strict_lint_reads_numbers_after_lone_carriage_returns() {
     let text = "globals\rinteger a = 0\rendglobals\rfunction f takes nothing returns nothing\rcall SetPlayerColor(Player(9), ConvertPlayerColor(9))\rset a = 99999999999\rcall TriggerSleepAction(1.0)\rendfunction\r";
     let program = crate::parse_with(text, crate::Dialect::Strict).unwrap();
-    let options = Options { source: Some(text), strict: true, ..Default::default() };
+    let options = Options { source: Some(text), ..Default::default() };
     let diags = crate::lint_with(&program, &options);
     let overflow: Vec<_> = diags.iter().filter(|d| d.rule == crate::lint::rule::NUMBER_OVERFLOW).map(|d| (d.line, d.message.clone())).collect();
     assert_eq!(overflow.len(), 1, "{overflow:?}");

@@ -38,3 +38,12 @@ fn a_parse_error_is_at_its_file() {
     let found = check(&[("a.j", "function A takes nothing returns nothing\nendfunction\n"), ("b.j", "\nfunction B takes nothing returns boolean\n    return !true\nendfunction\n")], &[]);
     assert_eq!(said(&found), [(1, 3, "")], "{found:?}");
 }
+
+/// A lone carriage return ends a `//` comment, as it ends any line
+/// (`parser_rs::lines`): what follows it is code.
+#[test]
+fn a_lone_carriage_return_ends_a_comment() {
+    let found = check(&[("x.j", "function f takes nothing returns nothing\r    // c\rreturn 1337\rendfunction\r")], &[]);
+    let errors: Vec<_> = found.iter().filter(|f| f.diagnostic.level == Level::Error).map(|f| (f.diagnostic.line, f.diagnostic.message.as_str())).collect();
+    assert!(errors.iter().any(|(l, m)| *l == 3 && m.contains("returns nothing")), "{errors:?}");
+}

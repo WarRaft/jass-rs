@@ -91,7 +91,7 @@ fn embedded(block: &parser_rs::Embedded, out: &mut Vec<SemanticToken>, syms: &mu
         *next_scope = next;
     } else {
         // A textmacro's or novjass's text: not code here, shown as a comment.
-        for (k, line) in block.source.lines().enumerate() {
+        for (k, line) in parser_rs::lines::lines(&block.source).enumerate() {
             let len = line.chars().count();
             if len > 0 {
                 out.push(SemanticToken::new(block.first_line + k, 1, len + 1, T::Comment, Modifiers::NONE));

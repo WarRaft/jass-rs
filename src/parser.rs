@@ -40,19 +40,11 @@ impl Parser {
         // A textmacro's or novjass's block isn't code of its place.
         // A NUL: the game reads no further.
         if let Some(at) = src.find('\0') {
-            let line = src[..at].matches('\n').count() + 1;
-            let col = src[..at].rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+            let starts = parser_rs::lines::line_starts(&src[..at]);
+            let line = starts.len();
+            let col = src[starts[line - 1]..at].chars().count() + 1;
             return Err(ParseError::at("a NUL character: the game reads no further", line, col));
         }
-        // Strict JASS: a lone carriage return breaks a line, as the game
-        // (and pjass) reads it.
-        let normalized;
-        let src = if dialect == Dialect::Strict && src.contains('\r') {
-            normalized = lone_cr(src);
-            normalized.as_str()
-        } else {
-            src
-        };
         let tokens: Vec<Token> = Lexer::tokenize_with(src, dialect)?.into_iter().filter(|t| !matches!(&t.kind, TokenKind::Embedded(b) if b.lang != "zinc")).collect();
         let places: Vec<(usize, usize, usize)> = tokens.iter().map(|t| (t.line, t.col, t.end_line)).collect();
         let mut p = Parser::new(tokens);
@@ -1379,48 +1371,6 @@ fn binary(left: Expr, op: BinOp, right: Expr) -> Expr {
     Expr::new(ExprKind::Binary(Box::new(left), op, Box::new(right)), span)
 }
 
-
-/// `src` with every carriage return not before a line feed made one, as
-/// the game reads a line: but in a comment (which only a line feed ends)
-/// and in a string or a rawcode (whose quote takes it).
-pub(crate) fn lone_cr(src: &str) -> String {
-    #[derive(PartialEq)]
-    enum In {
-        Code,
-        Comment,
-        Quote(char),
-    }
-    let mut out = String::with_capacity(src.len());
-    let mut chars = src.chars().peekable();
-    let mut state = In::Code;
-    while let Some(c) = chars.next() {
-        match state {
-            In::Code => match c {
-                '/' if chars.peek() == Some(&'/') => state = In::Comment,
-                '"' | '\'' => state = In::Quote(c),
-                '\r' if chars.peek() != Some(&'\n') => {
-                    out.push('\n');
-                    continue;
-                }
-                _ => {}
-            },
-            In::Comment if c == '\n' => state = In::Code,
-            In::Comment => {}
-            In::Quote(q) => {
-                if c == '\\' && matches!(chars.peek(), Some('\\' | '"')) {
-                    out.push(c);
-                    out.push(chars.next().expect("peeked"));
-                    continue;
-                }
-                if c == q {
-                    state = In::Code;
-                }
-            }
-        }
-        out.push(c);
-    }
-    out
-}
 
 /// Strict JASS's line breaks: a line break ends a declaration or a
 /// statement, and stands nowhere else but in a string or a rawcode (which

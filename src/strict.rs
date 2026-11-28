@@ -42,10 +42,12 @@ pub fn check_with(files: &[(&str, &str)], env: &[&Declarations], options: &crate
     for (_, t) in files {
         starts.push(lines + 1);
         text.push_str(t);
-        if !t.is_empty() && !t.ends_with('\n') {
+        let ends_broken = t.ends_with(parser_rs::lines::is_break);
+        if !t.is_empty() && !ends_broken {
             text.push('\n');
         }
-        lines += t.matches('\n').count() + usize::from(!t.is_empty() && !t.ends_with('\n'));
+        // Its lines, every break counted (`parser_rs::lines`).
+        lines += parser_rs::lines::line_count(t) - 1 + usize::from(!t.is_empty() && !ends_broken);
     }
     let place = |line: usize| -> (usize, usize) {
         let file = starts.iter().rposition(|&s| s <= line).unwrap_or(0);
@@ -90,7 +92,7 @@ pub fn check_with(files: &[(&str, &str)], env: &[&Declarations], options: &crate
             return vec![found(d)];
         }
     };
-    let options = crate::lint::Options { source: Some(&text), strict: true, ..*options };
+    let options = crate::lint::Options { source: Some(&text), ..*options };
     let mut out: Vec<Found> = crate::lint_with(&program, &options)
         .into_iter()
         .filter_map(|mut d| {
