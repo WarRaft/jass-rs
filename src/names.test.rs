@@ -472,3 +472,119 @@ fn variables_named_as_types() {
     let got: Vec<(usize, &str)> = found(src, &[]).into_iter().map(|(l, r, _)| (l, r)).collect();
     assert_eq!(got, [(3, rule::HIDDEN_TYPE), (4, rule::SHADOWED_NAME), (5, rule::HIDDEN_TYPE), (6, rule::SHADOWED_NAME)], "{:?}", found(src, &[]));
 }
+
+fn found_vjass(src: &str) -> Vec<(usize, &'static str, String)> {
+    let common = env();
+    let p = crate::Parser::parse_str_with(src, crate::Dialect::VJass).unwrap_or_else(|e| panic!("{}: {}", e.line, e.message));
+    check(&p, &[&common]).into_iter().map(|d| (d.line, d.rule, d.message)).collect()
+}
+
+#[test]
+fn vjass_members_without_this() {
+    // A method names its struct's fields and methods without `this.`, its
+    // modules' and its parent's too, and the members every struct has.
+    let src = "\
+module Counted
+    static integer made
+endmodule
+struct Base
+    real life
+endstruct
+struct Font extends Base
+    string path
+    integer array widths[8]
+    implement Counted
+    method show takes nothing returns nothing
+        call I2S(widths[0])
+    endmethod
+    static method create takes string p returns thistype
+        local thistype this = allocate()
+        set path = p
+        set made = made + 1
+        set life = 1.
+        call show()
+        return this
+    endmethod
+    method onDestroy takes nothing returns nothing
+        set this = 0
+        call deallocate()
+    endmethod
+endstruct
+function F takes nothing returns nothing
+    set path = \"x\"
+endfunction
+";
+    // Outside the struct, `path` is no one's.
+    assert_eq!(found_vjass(src), [(28, "unknown-name", "the variable 'path' is declared nowhere".to_string())]);
+}
+
+#[test]
+fn vjass_private_names_are_their_librarys() {
+    // Two libraries' private `i`: each its own, an array in one.
+    let src = "\
+library A
+    globals
+        private integer array i
+    endglobals
+    function FA takes nothing returns integer
+        return i[0]
+    endfunction
+endlibrary
+library B
+    globals
+        private integer i = 0
+    endglobals
+    function FB takes nothing returns integer
+        return i
+    endfunction
+endlibrary
+";
+    assert_eq!(found_vjass(src), []);
+}
+
+#[test]
+fn vjass_values_and_constants() {
+    // A struct's value is an integer: added, compared; `this` and the
+    // constants JassHelper gives; a static if's locals; a code value for a
+    // native's boolexpr; a branch of a library that isn't there left out.
+    let src = "\
+native TriggerAddCondition takes integer t, boolexpr b returns nothing
+type boolexpr extends handle
+library L
+    struct S
+        integer n
+        method next takes nothing returns thistype
+            static if DEBUG_MODE then
+                local integer k = 1
+            else
+                local integer k = 2
+            endif
+            if this == 0 or this + k > 8 then
+                return 0
+            endif
+            call I2S(StringLength(SCOPE_PRIVATE))
+            return this + 1
+        endmethod
+    endstruct
+    function Cond takes nothing returns boolean
+        return true
+    endfunction
+    function Init takes nothing returns nothing
+        local S s = 0
+        call TriggerAddCondition(0, function Cond)
+        if s == 1 then
+        endif
+        static if LIBRARY_Missing then
+            call Nothing(1, 2, 3)
+        elseif LIBRARY_L then
+            call I2S(1)
+        else
+            call AlsoNothing()
+        endif
+    endfunction
+endlibrary
+";
+    let got = found_vjass(src);
+    // `StringLength` isn't in this test's common.j: that alone.
+    assert_eq!(got, [(15, "unknown-name", "the function 'StringLength' is declared nowhere".to_string())], "{got:?}");
+}

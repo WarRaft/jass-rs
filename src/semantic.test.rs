@@ -252,3 +252,132 @@ fn a_local_without_local() {
     assert!(syms.iter().any(|o| o.name == "i" && o.kind == K::Local && o.declaration), "{syms:?}");
     assert!(syms.iter().any(|o| o.name == "g" && o.kind == K::Global && o.declaration), "{syms:?}");
 }
+
+/// vJASS's names: libraries and scopes, their private names, structs and
+/// their members, `this.` left out in a method, modules implemented.
+const VJASS: &str = "\
+// @dialect vjass
+library Fonts initializer Init requires Table, optional Ascii
+    globals
+        private integer count = 0
+        integer shared = 1
+    endglobals
+    module Pooled
+        static integer made
+        static method get takes nothing returns thistype
+            set made = made + 1
+            return thistype.allocate()
+        endmethod
+    endmodule
+    private struct fontchar extends array
+        string path
+        real width
+        implement Pooled
+        static method create takes string p, real w returns thistype
+            local thistype this = thistype.get()
+            set path = p
+            set this.width = w
+            call this.show(count)
+            return this
+        endmethod
+        method show takes integer n returns nothing
+            call BJDebugMsg(path)
+        endmethod
+    endstruct
+    private function Init takes nothing returns nothing
+        local fontchar c = fontchar.create(\"a\", 1.)
+        set c.path = \"b\"
+        call c.show(made)
+    endfunction
+endlibrary
+function Outside takes nothing returns nothing
+    call Init()
+    set count = shared
+endfunction
+";
+
+fn vjass_symbols() -> Vec<Occurrence> {
+    symbols(VJASS, Dialect::VJass)
+}
+
+/// The occurrences of `name`: line, kind, declaration, scope.
+fn of(syms: &[Occurrence], name: &str) -> Vec<(usize, K, bool, Scope)> {
+    syms.iter().filter(|o| o.name == name).map(|o| (o.line, o.kind, o.declaration, o.scope)).collect()
+}
+
+#[test]
+fn vjass_libraries_and_their_private_names() {
+    let syms = vjass_symbols();
+    assert_eq!(of(&syms, "Fonts"), [(2, K::Library, true, Scope::Project)]);
+    assert_eq!(of(&syms, "Table"), [(2, K::Library, false, Scope::Project)]);
+    assert_eq!(of(&syms, "Ascii"), [(2, K::Library, false, Scope::Project)]);
+    // The library is scope 1: its private names are in it, and so are its
+    // uses of them, above the declaration too (`initializer Init`).
+    let lib = Scope::Local(1);
+    assert_eq!(of(&syms, "Init"), [(2, K::Function, false, lib), (29, K::Function, true, lib), (36, K::Function, false, Scope::Project)]);
+    let count = of(&syms, "count");
+    assert_eq!(count[..2], [(4, K::Global, true, lib), (22, K::Global, false, lib)], "{count:?}");
+    // Outside the library, `count` is some other one.
+    assert_eq!(count[2], (37, K::Global, false, Scope::Project));
+    assert_eq!(of(&syms, "shared"), [(5, K::Global, true, Scope::Project), (37, K::Global, false, Scope::Project)]);
+    // A private struct: the library's.
+    let fc = of(&syms, "fontchar");
+    assert_eq!(fc[0], (14, K::Struct, true, lib), "{fc:?}");
+    assert!(fc[1..].iter().all(|o| o.3 == lib && !o.2), "{fc:?}");
+}
+
+#[test]
+fn vjass_members() {
+    let syms = vjass_symbols();
+    let m = Scope::Member;
+    // Fields: declared in the struct (its namespace), used after a `.`
+    // and without `this.` in its methods; a module's too.
+    assert_eq!(
+        of(&syms, "path"),
+        [(15, K::Field, true, m), (20, K::Field, false, m), (26, K::Field, false, m), (31, K::Field, false, m)]
+    );
+    let path = syms.iter().find(|o| o.name == "path" && o.declaration).unwrap();
+    assert_eq!(path.namespace, "fontchar");
+    assert_eq!(of(&syms, "width"), [(16, K::Field, true, m), (21, K::Field, false, m)]);
+    assert_eq!(
+        of(&syms, "made"),
+        [(8, K::Field, true, m), (10, K::Field, false, m), (10, K::Field, false, m), (32, K::Global, false, Scope::Project)]
+    // (outside the struct, `made` is no member: a global, declared nowhere)
+    );
+    // Methods.
+    assert_eq!(of(&syms, "create"), [(18, K::Method, true, m), (30, K::Method, false, m)]);
+    assert_eq!(of(&syms, "show"), [(22, K::Method, false, m), (25, K::Method, true, m), (32, K::Method, false, m)]);
+    assert_eq!(of(&syms, "get"), [(9, K::Method, true, m), (19, K::Method, false, m)]);
+    assert_eq!(of(&syms, "Pooled"), [(7, K::Module, true, Scope::Project), (17, K::Module, false, Scope::Project)]);
+    // A method's parameters and locals are its own; `this` is a keyword.
+    let create = of(&syms, "p");
+    assert!(matches!(create[..], [(18, K::Parameter, true, Scope::Local(_)), (20, K::Parameter, false, Scope::Local(_))]), "{create:?}");
+    assert!(of(&syms, "this").is_empty());
+    assert_eq!(of(&syms, "BJDebugMsg"), [(26, K::Function, false, Scope::Project)]);
+}
+
+#[test]
+fn vjass_highlighting() {
+    let toks = semantic_tokens_with(VJASS, Dialect::VJass);
+    let at = |line: usize, word: &str| {
+        let text = VJASS.lines().nth(line - 1).unwrap();
+        let col = text.find(word).map(|i| text[..i].chars().count() + 1).unwrap();
+        toks.iter().find(|t| t.line == line && t.start_col == col).map(|t| (t.ty, t.mods)).unwrap()
+    };
+    assert_eq!(at(2, "Fonts"), (T::Namespace, m(&[M::Declaration])));
+    assert_eq!(at(14, "fontchar"), (T::Struct, m(&[M::Declaration])));
+    assert_eq!(at(15, "path"), (T::Property, m(&[M::Declaration])));
+    assert_eq!(at(18, "create"), (T::Method, m(&[M::Declaration, M::Static])));
+    assert_eq!(at(20, "path"), (T::Property, m(&[M::Modification])));
+    assert_eq!(at(26, "path"), (T::Property, m(&[])));
+    assert_eq!(at(30, "fontchar"), (T::Struct, m(&[])));
+    assert_eq!(at(31, "path"), (T::Property, m(&[M::Modification])));
+}
+
+#[test]
+fn plain_jass_names_vjass_words() {
+    // In plain JASS `library` and `struct` are names: nothing changes.
+    let src = "globals\n    integer library = 1\n    integer struct = 2\nendglobals\nfunction F takes nothing returns nothing\n    set library = struct\nendfunction\n";
+    let syms = symbols(src, Dialect::Jass);
+    assert_eq!(of(&syms, "library"), [(2, K::Global, true, Scope::Project), (6, K::Global, false, Scope::Project)]);
+}

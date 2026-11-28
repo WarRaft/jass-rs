@@ -579,9 +579,23 @@ vJASS: what a library or scope declares is known by its name, a `public`
 one also as `Scope_name`; a struct, interface, module, function
 interface or `keyword` is a name known without its type (a struct's
 values are integers to vJASS, so they go anywhere); `thistype` is a type,
-`LIBRARY_<name>` a boolean constant. A member (`a.b`, `a.b()`, `this`)
-has the names it uses checked, and no type: what `a` is, and who may see
-a private name, take vJASS's own resolution, which the build does.
+`LIBRARY_<name>` and `DEBUG_MODE` boolean constants, `SCOPE_PREFIX` and
+`SCOPE_PRIVATE` strings, `key` a type. A struct's values are integers: a
+struct, `thistype`, an interface or a function interface adds and
+compares as one. A member (`a.b`, `a.b()`) has the names it uses
+checked, and no type: what `a` is takes vJASS's own resolution, which
+the build does. In a struct's (module's, interface's) methods, `this` is
+a `thistype` (set too), and its fields and methods are known without
+`this.`: its own with their types, its modules' and its parent's
+(`Declarations::structs`, `modules`) and what every struct has
+(`allocate`, `deallocate`, `create`, `destroy` ...) without. A library's
+names are its own first: two libraries' private `i` are two. A `static
+if` of `LIBRARY_<name>`s (`not`, `and`, `or`) is checked as the build
+keeps it: a branch of a library that isn't there (in the program and its
+environment) left out; every branch of any other condition. Locals of a
+`static if`'s branches are the function's. A code value where a game's
+function (one the program doesn't declare) takes a `boolexpr` is
+`Condition(function F)`, as JassHelper and the build make it.
 
 Lint rules: duplicate globals (in `globals` and at the top level),
 functions and locals, and statements outside a function (errors); unused
@@ -599,6 +613,24 @@ highlighting.
 | globals, constants                      | `Global`, `Constant`           | project                      |
 | types (`type`, not the primitives)      | `Type`                         | project                      |
 | parameters, locals                      | `Parameter`, `Local`           | their signature (`Local(n)`, `n` counts signatures in the file) |
+| vJASS libraries, scopes                 | `Library`, `Namespace`         | project                      |
+| vJASS structs, interfaces, modules      | `Struct`, `Interface`, `Module` | project, or their library's when `private` |
+| vJASS fields, methods                   | `Field`, `Method`              | member (`namespace`: the struct's name) |
+| vJASS private names of a library        | as above                       | the library's (`Local(n)`, numbered with the signatures) |
+
+vJASS (in `Dialect::VJass`: its words are keywords there alone, so plain
+JASS is read as before): a library's or a scope's `private` names are in
+its own local scope, and so are its uses of them, above the declaration
+too (`initializer Init`), a scope's in a library seeing the library's;
+`public` ones, and any other, are the project's (as `name`: the
+`Scope_name` spelling isn't linked). A struct's (interface's, module's)
+fields and methods are members, matched by name as Zinc's are (what a
+value's struct is takes types); a name after `.` is one, and so is a
+name a method uses without `this.` that its struct has: its own, its
+modules' (`implement`) and its parent's (`extends`), the ones the file
+declares. `requires A, optional B` (without commas, over lines) names
+libraries; `implement M` a module; `S.m`, `function S.m` the struct;
+`F.evaluate()`, `F.execute()`, `hook N F` functions.
 
 A reference's kind is what it's classified as where it's used: a call is
 a `Function` unless a `native` of that name is declared in the same file.

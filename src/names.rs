@@ -77,6 +77,11 @@ pub struct Declarations {
     pub array_structs: HashMap<String, Members>,
     /// vJASS: each module, what it gives a struct that implements it.
     pub modules: HashMap<String, Members>,
+    /// vJASS: every struct's and interface's members, which its methods
+    /// name without `this.` (and its children's).
+    pub structs: HashMap<String, Members>,
+    /// vJASS: the libraries (`LIBRARY_<name>` is true).
+    pub libraries: HashSet<String>,
     /// vJASS: each dynamic array type (`type T extends E array [8]`), its
     /// elements' type.
     pub dynamic: HashMap<String, String>,
@@ -91,7 +96,11 @@ pub struct Members {
     pub implements: Vec<String>,
     /// Instance members: name, has a default value, is an array.
     pub fields: Vec<(String, bool, bool)>,
+    /// Static members' names.
+    pub statics: Vec<String>,
     pub on_destroy: bool,
+    /// The struct (or interface) it extends.
+    pub parent: Option<String>,
 }
 
 impl Members {
@@ -105,7 +114,8 @@ impl Members {
                 }
                 StructMember::Implement { name, .. } => m.implements.push(name.clone()),
                 StructMember::Field(g) if !g.modifiers.is_static => m.fields.push((g.name.clone(), g.initializer.is_some(), g.is_array)),
-                StructMember::Field(_) | StructMember::StaticIf { .. } => {}
+                StructMember::Field(g) => m.statics.push(g.name.clone()),
+                StructMember::StaticIf { .. } => {}
             }
         }
         m
@@ -155,6 +165,9 @@ impl Declarations {
                     self.types.insert(name.clone(), extends.clone());
                 }
                 TopLevel::Library(l) => {
+                    if !l.scope {
+                        self.libraries.insert(l.name.clone());
+                    }
                     let mut path = scope.to_vec();
                     path.push(l.name.clone());
                     self.add_items(&l.items, &path);
@@ -164,6 +177,8 @@ impl Declarations {
                     if st.extends.as_deref() == Some("array") {
                         self.array_structs.entry(st.name.clone()).or_insert_with(|| Members::of(&st.members));
                     }
+                    let parent = st.extends.clone().filter(|p| p != "array");
+                    self.structs.entry(st.name.clone()).or_insert_with(|| Members { parent, ..Members::of(&st.members) });
                     self.others.insert(st.name.clone());
                 }
                 TopLevel::Module(m) => {
@@ -174,8 +189,11 @@ impl Declarations {
                     self.dynamic.insert(name.clone(), extends.clone());
                     self.others.insert(name.clone());
                 }
-                TopLevel::Interface(TypeDecl { name, .. })
-                | TopLevel::FunctionInterface(FunctionSig { name, .. })
+                TopLevel::Interface(TypeDecl { name, members, .. }) => {
+                    self.structs.entry(name.clone()).or_insert_with(|| Members::of(members));
+                    self.others.insert(name.clone());
+                }
+                TopLevel::FunctionInterface(FunctionSig { name, .. })
                 | TopLevel::Keyword { name, .. } => {
                     self.others.insert(name.clone());
                 }
@@ -213,6 +231,10 @@ impl Declarations {
             self.types.entry(k.clone()).or_insert_with(|| v.clone());
         }
         self.others.extend(other.others.iter().cloned());
+        self.libraries.extend(other.libraries.iter().cloned());
+        for (k, v) in &other.structs {
+            self.structs.entry(k.clone()).or_insert_with(|| v.clone());
+        }
         for (k, v) in &other.array_structs {
             self.array_structs.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -278,11 +300,36 @@ pub fn comment_of(src: &str, line: usize) -> String {
 struct Scope<'a> {
     own: &'a Declarations,
     env: &'a [&'a Declarations],
+    /// vJASS: what the libraries and scopes around declare, innermost
+    /// last: their private names are theirs, over another library's of
+    /// the same name.
+    libraries: Vec<Declarations>,
 }
 
 impl Scope<'_> {
     fn all(&self) -> impl Iterator<Item = &Declarations> {
-        std::iter::once(self.own).chain(self.env.iter().copied())
+        self.libraries.iter().rev().chain(std::iter::once(self.own)).chain(self.env.iter().copied())
+    }
+
+    /// Every member a struct's (interface's, module's) methods name
+    /// without `this.`: its own, its modules' and its parents', by name.
+    fn members_of(&self, own: &Members) -> HashSet<String> {
+        let mut out = HashSet::new();
+        let mut todo = vec![own.clone()];
+        let mut seen = HashSet::new();
+        while let Some(m) = todo.pop() {
+            out.extend(m.methods.iter().cloned());
+            out.extend(m.fields.iter().map(|f| f.0.clone()));
+            out.extend(m.statics.iter().cloned());
+            let next = m.implements.iter().filter_map(|i| self.all().find_map(|d| d.modules.get(i)).map(|x| (i, x)));
+            let parent = m.parent.iter().filter_map(|p| self.all().find_map(|d| d.structs.get(p)).map(|x| (p, x)));
+            for (name, x) in next.chain(parent).collect::<Vec<_>>() {
+                if seen.insert(name.clone()) {
+                    todo.push(x.clone());
+                }
+            }
+        }
+        out
     }
 
     fn function(&self, name: &str) -> Option<Option<&Signature>> {
@@ -322,7 +369,48 @@ impl Scope<'_> {
     }
 
     fn type_known(&self, name: &str) -> bool {
-        PRIMITIVES.contains(&name) || name == "thistype" || self.all().any(|d| d.types.contains_key(name) || d.others.contains(name))
+        PRIMITIVES.contains(&name) || self.integer_like(name) || self.all().any(|d| d.types.contains_key(name))
+    }
+
+    /// vJASS: a `static if`'s condition, when it's made of `LIBRARY_<name>`
+    /// (with `not`, `and`, `or`): is the library there? `None` for
+    /// anything else (every branch is checked then).
+    fn libraries_say(&self, e: &Expr) -> Option<bool> {
+        match &e.kind {
+            ExprKind::Var(n) => n.strip_prefix("LIBRARY_").map(|l| self.all().any(|d| d.libraries.contains(l))),
+            ExprKind::Unary(UnaryOp::Not, x) => self.libraries_say(x).map(|b| !b),
+            ExprKind::Binary(a, op @ (BinOp::And | BinOp::Or), b) => {
+                let (a, b) = (self.libraries_say(a)?, self.libraries_say(b)?);
+                Some(if *op == BinOp::And { a && b } else { a || b })
+            }
+            _ => None,
+        }
+    }
+
+    /// The branches of a `static if` the build may keep: one whose
+    /// libraries are there, and none after it; none whose libraries
+    /// aren't; the `else` unless one is surely kept.
+    fn kept<'b, T>(&self, branches: &'b [(Expr, T)], else_branch: Option<&'b T>) -> Vec<&'b T> {
+        let mut out = Vec::new();
+        for (cond, body) in branches {
+            match self.libraries_say(cond) {
+                Some(false) => {}
+                Some(true) => {
+                    out.push(body);
+                    return out;
+                }
+                None => out.push(body),
+            }
+        }
+        out.extend(else_branch);
+        out
+    }
+
+    /// vJASS: a type whose values are integers to JassHelper (a struct, an
+    /// interface, `thistype`, a function interface, a dynamic array,
+    /// `key`): it adds and compares as an integer.
+    fn integer_like(&self, name: &str) -> bool {
+        name == "thistype" || name == "key" || self.all().any(|d| d.others.contains(name))
     }
 
     /// The type `name` extends, if it's one of the declared types.
@@ -406,8 +494,8 @@ impl Ty {
 /// line.
 pub fn check(program: &Program, env: &[&Declarations]) -> Vec<Diagnostic> {
     let own = Declarations::of(program);
-    let scope = Scope { own: &own, env };
-    let mut c = Checker { scope, out: Vec::new(), locals: HashMap::new(), returns: None, current: None, constant_fn: false, hidden_types: HashSet::new() };
+    let scope = Scope { own: &own, env, libraries: Vec::new() };
+    let mut c = Checker { scope, out: Vec::new(), locals: HashMap::new(), returns: None, current: None, constant_fn: false, hidden_types: HashSet::new(), fields: HashMap::new(), members: HashSet::new(), in_type: false };
     c.items(&program.items);
     c.out.sort_by_key(|d| d.line);
     c.out
@@ -437,6 +525,14 @@ struct Checker<'a> {
     /// The types a parameter or a local of the function hides (named as
     /// them): not to be named after it.
     hidden_types: HashSet<String>,
+    /// vJASS: the fields of the struct (module, interface) whose method is
+    /// checked, which it names without `this.`: their type and whether an
+    /// array; and every member's name it may (its modules', its
+    /// parent's: no type here).
+    fields: HashMap<String, (String, bool)>,
+    members: HashSet<String>,
+    /// vJASS: checking a struct's, module's or interface's members.
+    in_type: bool,
 }
 
 /// The span of `name` at the start of `span` (a call's, an array
@@ -454,12 +550,19 @@ impl Checker<'_> {
                 TopLevel::Globals(decls) => decls.iter().for_each(|g| self.global(g)),
                 TopLevel::Global(g) => self.global(g),
                 TopLevel::TypeDef { extends, line, .. } => self.type_name(extends, *line),
-                TopLevel::Library(l) => self.items(&l.items),
-                TopLevel::StaticIf { branches, .. } => {
+                TopLevel::Library(l) => {
+                    let mut d = Declarations::default();
+                    d.add_items(&l.items, &[]);
+                    self.scope.libraries.push(d);
+                    self.items(&l.items);
+                    self.scope.libraries.pop();
+                }
+                TopLevel::StaticIf { branches, else_branch, .. } => {
                     for (cond, _) in branches {
                         self.condition(cond, "static if");
                     }
-                    self.items(&item.static_if_items().cloned().collect::<Vec<_>>());
+                    let kept: Vec<TopLevel> = self.scope.kept(branches, else_branch.as_ref()).into_iter().flatten().cloned().collect();
+                    self.items(&kept);
                 }
                 TopLevel::Struct(StructDecl { members, .. }) | TopLevel::Module(TypeDecl { members, .. }) | TopLevel::Interface(TypeDecl { members, .. }) => {
                     self.current = match item {
@@ -476,6 +579,22 @@ impl Checker<'_> {
                             branches.iter().for_each(|(c, _)| self.condition(c, "static if"));
                         }
                     }
+                    let own = Members::of(members);
+                    let own = match item {
+                        TopLevel::Struct(st) => Members { parent: st.extends.clone().filter(|p| p != "array"), ..own },
+                        _ => own,
+                    };
+                    self.members = self.scope.members_of(&own);
+                    // What every struct has (JassHelper's).
+                    self.members.extend(["allocate", "deallocate", "create", "destroy", "getType", "typeid"].map(String::from));
+                    self.in_type = true;
+                    self.fields = all_members(members)
+                        .into_iter()
+                        .filter_map(|m| match m {
+                            StructMember::Field(g) => Some((g.name.clone(), (g.type_name.clone(), g.is_array))),
+                            _ => None,
+                        })
+                        .collect();
                     for m in all_members(members) {
                         match m {
                             StructMember::Field(g) => self.global(g),
@@ -487,6 +606,9 @@ impl Checker<'_> {
                         }
                     }
                     self.current = None;
+                    self.fields.clear();
+                    self.members.clear();
+                    self.in_type = false;
                 }
                 TopLevel::Stmt(_) | TopLevel::Zinc(_) | TopLevel::Keyword { .. } | TopLevel::Hook { .. } => {}
             }
@@ -594,9 +716,25 @@ impl Checker<'_> {
         if let Some((ty, array)) = self.locals.get(name) {
             return Some(Var { ty: ty.clone(), array: *array, constant: false });
         }
+        // vJASS: a field of the struct, `this.` left out (in its methods:
+        // a field's initializer sees them too).
+        if let Some((ty, array)) = self.fields.get(name) {
+            return Some(Var { ty: ty.clone(), array: *array, constant: false });
+        }
+        if self.members.contains(name) {
+            return None;
+        }
         // vJASS: whether a library is there, false when it isn't.
-        if name.strip_prefix("LIBRARY_").is_some_and(|l| !l.is_empty()) {
+        if name.strip_prefix("LIBRARY_").is_some_and(|l| !l.is_empty()) || name == "DEBUG_MODE" {
             return Some(Var { ty: "boolean".into(), array: false, constant: true });
+        }
+        // vJASS: the scope's prefix (`Lib_`, `Lib__` for private names).
+        if matches!(name, "SCOPE_PREFIX" | "SCOPE_PRIVATE") {
+            return Some(Var { ty: "string".into(), array: false, constant: true });
+        }
+        // vJASS: `this` in a method (`set this = ...` too).
+        if name == "this" && self.in_type {
+            return Some(Var { ty: "thistype".into(), array: false, constant: false });
         }
         match self.scope.global(name) {
             Some(Some(g)) => Some(Var { ty: g.type_name.clone(), array: g.is_array, constant: g.constant }),
@@ -628,6 +766,10 @@ impl Checker<'_> {
         if name == "integer" && args.len() == 1 {
             return Some(Ty::of("integer"));
         }
+        // A method of the struct's, `this.` left out: no type here.
+        if self.members.contains(name) && !self.locals.contains_key(name) {
+            return None;
+        }
         let sig = match self.scope.function(name) {
             None => {
                 self.unknown("the function", name, line, span);
@@ -657,7 +799,13 @@ impl Checker<'_> {
             };
             self.push(Diagnostic::error(rule::ARGUMENT_COUNT, format!("'{name}' takes {takes}, not {}", args.len()), line), span);
         } else {
+            // A code value given a game's function for a boolexpr is
+            // `Condition(function F)` (JassHelper's, the build's).
+            let game = sig.native || !self.scope.own.functions.contains_key(name);
             for (i, ((a, ty), want)) in args.iter().zip(types).zip(&sig.params).enumerate() {
+                if game && want == "boolexpr" && ty.as_ref().is_some_and(|t| t.is("code")) {
+                    continue;
+                }
                 self.expect(ty, want, || format!("argument {} of '{name}'", i + 1), a.span.start_line, Some(a.span));
             }
         }
@@ -774,12 +922,13 @@ impl Checker<'_> {
                 self.expr(call);
             }
             Stmt::StaticIf { branches, else_branch, .. } => {
-                for (cond, body) in branches {
+                for (cond, _) in branches {
                     self.condition(cond, "static if");
-                    self.stmts(body);
                 }
-                if let Some(b) = else_branch {
-                    self.stmts(b);
+                // A branch of a library that isn't there is left out, as
+                // the build leaves it out.
+                for body in self.scope.kept(branches, else_branch.as_ref()) {
+                    self.stmts(body);
                 }
             }
         }
@@ -941,6 +1090,13 @@ impl Checker<'_> {
     }
 
     fn binary(&mut self, op: BinOp, ta: Option<Ty>, tb: Option<Ty>, e: &Expr) -> Option<Ty> {
+        // vJASS: a struct's value (`thistype`, an interface's ...) is an
+        // integer, which it adds and compares as.
+        let integer = |t: Option<Ty>| t.map(|t| match t {
+            Ty::Is(n) if self.scope.integer_like(&n) => Ty::of("integer"),
+            t => t,
+        });
+        let (ta, tb) = (integer(ta), integer(tb));
         let line = e.span.start_line;
         let span = Some(e.span);
         match op {
@@ -1043,6 +1199,15 @@ fn collect_locals(body: &[Stmt], out: &mut HashMap<String, (String, bool)>) {
                 }
             }
             Stmt::Loop { body, .. } => collect_locals(body, out),
+            // vJASS: every branch's (the build keeps one).
+            Stmt::StaticIf { branches, else_branch, .. } => {
+                for (_, b) in branches {
+                    collect_locals(b, out);
+                }
+                if let Some(b) = else_branch {
+                    collect_locals(b, out);
+                }
+            }
             Stmt::Debug { stmt, .. } => collect_locals(std::slice::from_ref(stmt), out),
             _ => {}
         }
