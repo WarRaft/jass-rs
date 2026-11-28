@@ -687,6 +687,24 @@ The VS Code extension honours each file's header as well. See the
 [`parser-rs` design notes](../parser-rs/README.md#4-embedded-languages-one-token-then-hand-over-control)
 for how embedding works in general.
 
+## Formatting
+
+`format::format(src, dialect, unit, lines)`: each line moved left or right
+to its level, never a line added, removed or joined (see the
+[`parser-rs` README](../parser-rs/README.md#13-formatting-only-moves-lines)).
+A line starting with `function`, `globals`, `if`, `loop` opens a block
+and its `end...` closes it; `else` and `elseif` stand at their `if`.
+vJASS adds `library` (`library_once`), `scope`, `struct`, `interface`,
+`module`, `method` and `static if`. Modifiers before the keyword
+(`private`, `public`, `static`, `constant`, `stub`, `debug`) don't count,
+and what has no body opens nothing: `function interface`, a method of an
+interface. A closing keyword with nothing to close stays at its level.
+A `//! zinc` block is formatted as Zinc at its directives' level; a
+`//! textmacro`, `//! novjass` or `//! inject` block's lines (text, not
+code of their place) move with their opening directive. The lines a
+string goes on into stay. The game's `Blizzard.j`, formatted with four
+spaces, changes only its tabs and its blank lines' spaces.
+
 ## CLI
 
 ```sh

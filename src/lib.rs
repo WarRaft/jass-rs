@@ -1,5 +1,6 @@
 pub mod array_struct;
 pub mod ast;
+pub mod format;
 pub mod html;
 pub mod lexer;
 pub mod lint;
