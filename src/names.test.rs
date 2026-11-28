@@ -449,23 +449,3 @@ endfunction
     let said: Vec<String> = check(&prog, &[]).into_iter().map(|d| d.message).collect();
     assert!(said.is_empty(), "{said:?}");
 }
-
-#[test]
-fn string_arguments_of_declared_functions() {
-    let env = crate::parse("type framehandle extends handle\nnative BlzGetFrameByName takes string name, integer createContext returns framehandle\nnative Print takes string s returns nothing\n").unwrap();
-    let env = Declarations::of(&env);
-    let program = crate::parse(concat!(
-        "function F takes nothing returns nothing\n",
-        "    local framehandle f = BlzGetFrameByName(\"Menu\", 0)\n",
-        "    call Print(\"hi\")\n",
-        "    call Unknown(\"x\")\n",
-        "endfunction\n",
-    ))
-    .unwrap();
-    let (_, strings) = check_with_strings(&program, &[&env]);
-    let got: Vec<String> = strings
-        .iter()
-        .map(|s| format!("{} {}:{}-{} {}#{} {:?}", s.text, s.span.start_line, s.span.start_col, s.span.end_col, s.function, s.index, s.returns))
-        .collect();
-    assert_eq!(got, ["Menu 2:46-50 BlzGetFrameByName#0 Some(\"framehandle\")", "hi 3:17-19 Print#0 None"]);
-}

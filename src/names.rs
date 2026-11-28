@@ -402,36 +402,12 @@ impl Ty {
 /// type (`type-mismatch`, `array-access`, `constant-assignment`); sorted by
 /// line.
 pub fn check(program: &Program, env: &[&Declarations]) -> Vec<Diagnostic> {
-    check_with_strings(program, env).0
-}
-
-/// A string literal passed to a function the program or `env` declares
-/// (`BlzCreateFrame("EscMenuButtonTemplate", ...)`): what a consumer that
-/// knows what a function's strings mean links to what they name (the
-/// editor: a function returning `framehandle`, its strings to frames).
-#[derive(Debug, Clone, PartialEq)]
-pub struct StringArgument {
-    /// The string's value.
-    pub text: String,
-    /// Its text, inside the quotes.
-    pub span: Span,
-    /// The function it's passed to, and its argument's number (from 0).
-    pub function: String,
-    pub index: usize,
-    /// What the function returns (`None`: nothing).
-    pub returns: Option<String>,
-}
-
-/// [`check`], and every string literal passed to a function the names
-/// resolve to ([`StringArgument`]), in source order.
-pub fn check_with_strings(program: &Program, env: &[&Declarations]) -> (Vec<Diagnostic>, Vec<StringArgument>) {
     let own = Declarations::of(program);
     let scope = Scope { own: &own, env };
-    let mut c = Checker { scope, out: Vec::new(), strings: Vec::new(), locals: HashMap::new(), returns: None, current: None };
+    let mut c = Checker { scope, out: Vec::new(), locals: HashMap::new(), returns: None, current: None };
     c.items(&program.items);
     c.out.sort_by_key(|d| d.line);
-    c.strings.sort_by_key(|s| (s.span.start_line, s.span.start_col));
-    (c.out, c.strings)
+    c.out
 }
 
 /// A variable as a function sees it: its type, is it an array, is it a
@@ -445,7 +421,6 @@ struct Var {
 struct Checker<'a> {
     scope: Scope<'a>,
     out: Vec<Diagnostic>,
-    strings: Vec<StringArgument>,
     /// The parameters and locals of the function being checked: type and
     /// whether an array.
     locals: HashMap<String, (String, bool)>,
@@ -620,15 +595,6 @@ impl Checker<'_> {
             Some(None) => return None,
             Some(Some(sig)) => sig.clone(),
         };
-        for (index, a) in args.iter().enumerate() {
-            if let ExprKind::StringLiteral(text) = &a.kind
-                && a.span.start_line == a.span.end_line
-                && a.span.end_col >= a.span.start_col + 2
-            {
-                let span = Span::new(a.span.start_line, a.span.start_col + 1, a.span.end_line, a.span.end_col - 1);
-                self.strings.push(StringArgument { text: text.clone(), span, function: name.to_string(), index, returns: sig.returns.clone() });
-            }
-        }
         if sig.params.len() != args.len() {
             let takes = match sig.params.len() {
                 0 => "nothing".to_string(),
